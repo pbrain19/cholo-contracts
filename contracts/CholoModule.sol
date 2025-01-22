@@ -8,10 +8,12 @@ import "contracts/interfaces/external/velodrome/periphery/interfaces/INonfungibl
 import "contracts/interfaces/external/velodrome/core/interfaces/ICLPool.sol";
 import "contracts/interfaces/external/velodrome/gauge/interfaces/ICLGauge.sol";
 
-contract CholoModule {
+contract CholoDromeModule {
   // State variables will be added here
 
   address public immutable owner;
+  address public rewardToken; // Velo token address
+  address public rewardStable; // USDT token address
   
   // Mapping of Safe => NFT Position Manager => is approved
   mapping(address => mapping(address => bool)) public approvedManagers;
@@ -26,10 +28,20 @@ contract CholoModule {
     uint256 amount0,
     uint256 amount1
   );
+  event RewardTokenUpdated(address indexed oldToken, address indexed newToken);
+  event RewardStableUpdated(address indexed oldStable, address indexed newStable);
 
-  constructor(address _owner) {
+  constructor(
+    address _owner,
+    address _rewardToken,
+    address _rewardStable
+  ) {
     require(_owner != address(0), "Invalid owner");
+    require(_rewardToken != address(0), "Invalid reward token");
+    require(_rewardStable != address(0), "Invalid reward stable");
     owner = _owner;
+    rewardToken = _rewardToken;
+    rewardStable = _rewardStable;
   }
 
   modifier onlyOwner() {
@@ -41,7 +53,7 @@ contract CholoModule {
   /// @notice Batch approve multiple NFT position managers for a Safe
   /// @dev Can only be called by the owner
   /// @param managers Array of NFT position manager addresses to approve
-  function batchApproveManagers(address[] calldata managers) onlyOwner external {
+  function batchApproveManagers(address[] calldata managers) external onlyOwner {
     for(uint i = 0; i < managers.length; i++) {
       require(managers[i] != address(0), "Invalid manager");
       approvedManagers[msg.sender][managers[i]] = true;
@@ -52,11 +64,29 @@ contract CholoModule {
   /// @notice Batch remove approval for multiple NFT position managers for a Safe
   /// @dev Can only be called by the owner
   /// @param managers Array of NFT position manager addresses to remove
-  function batchRemoveManagers(address[] calldata managers) onlyOwner  external {
+  function batchRemoveManagers(address[] calldata managers) external onlyOwner {
     for(uint i = 0; i < managers.length; i++) {
       delete approvedManagers[msg.sender][managers[i]];
       emit ManagerRemoved(msg.sender, managers[i]);
     }
+  }
+
+  /// @notice Update the reward token address (Velo)
+  /// @param _newRewardToken The new reward token address
+  function setRewardToken(address _newRewardToken) external onlyOwner {
+    require(_newRewardToken != address(0), "Invalid reward token");
+    address oldToken = rewardToken;
+    rewardToken = _newRewardToken;
+    emit RewardTokenUpdated(oldToken, _newRewardToken);
+  }
+
+  /// @notice Update the reward stable token address (USDT)
+  /// @param _newRewardStable The new reward stable token address
+  function setRewardStable(address _newRewardStable) external onlyOwner {
+    require(_newRewardStable != address(0), "Invalid reward stable");
+    address oldStable = rewardStable;
+    rewardStable = _newRewardStable;
+    emit RewardStableUpdated(oldStable, _newRewardStable);
   }
 
   /// @notice Executes a transaction through the Safe to withdraw liquidity, collect fees, and burn the NFT
