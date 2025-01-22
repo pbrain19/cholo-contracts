@@ -1,0 +1,10 @@
+lib
+typechain
+cache
+cache_hardhat
+artifacts
+broadcast
+out
+openzeppelin-contracts
+permit2
+solmate

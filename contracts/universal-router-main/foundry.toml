@@ -1,0 +1,52 @@
+[profile.default]
+src = 'contracts'
+out = 'out'
+libs = ['lib']
+via_ir = true
+solc_version = '0.8.17'
+optimizer_runs = 1_000_000
+fs_permissions = [
+    { access = "read", path = "./script/deployParameters/"},
+    { access = "read-write", path = "./deployment-addresses/"}
+]
+
+# @see {@link https://github.com/foundry-rs/foundry/issues/4060}
+auto_detect_remappings = true
+bytecode_hash = "none"
+cbor_metadata = false
+sparse_mode = false
+
+[profile.default.optimizer_details]
+constantOptimizer = true
+yul = true
+
+[fmt]
+line_length = 120
+quote_style = 'single'
+
+[profile.lite.optimizer_details.yulDetails]
+optimizerSteps = ''
+
+[fuzz]
+runs = 5000
+
+[rpc_endpoints]
+lisk = "${LISK_RPC_URL}"
+mode = "${MODE_RPC_URL}"
+optimism = "${OPTIMISM_RPC_URL}"
+fraxtal = "${FRAXTAL_RPC_URL}"
+metal = "${METAL_RPC_URL}"
+superseed = "${SUPERSEED_RPC_URL}"
+ink = "${INK_RPC_URL}"
+soneium = "${SONEIUM_RPC_URL}"
+
+[etherscan]
+mode = { key = "${MODE_ETHERSCAN_API_KEY}", url = "${MODE_ETHERSCAN_VERIFIER_URL}" }
+optimism = { key = "${OPTIMISM_ETHERSCAN_API_KEY}", url = "${OPTIMISM_ETHERSCAN_VERIFIER_URL}" }
+fraxtal = { key = "${FRAXTAL_ETHERSCAN_API_KEY}", url = "${FRAXTAL_ETHERSCAN_VERIFIER_URL}" }
+metal = { key = "NA", url = "${METAL_ETHERSCAN_VERIFIER_URL}" }
+superseed = { key = "NA", url = "${SUPERSEED_ETHERSCAN_VERIFIER_URL}" }
+ink = { key = "NA", url = "${INK_ETHERSCAN_VERIFIER_URL}" }
+soneium = { key = "NA", url = "${SONEIUM_ETHERSCAN_VERIFIER_URL}" }
+
+# See more config options https://github.com/foundry-rs/foundry/tree/master/config
