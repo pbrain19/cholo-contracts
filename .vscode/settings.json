@@ -1,3 +1,15 @@
 {
-  "solidity.compileUsingRemoteVersion": "v0.8.28+commit.7893614a"
+  "solidity.compileUsingRemoteVersion": "v0.8.28+commit.7893614a",
+  "solidity.packageDefaultDependenciesContractsDirectory": "contracts",
+  "solidity.packageDefaultDependenciesDirectory": "node_modules",
+  "editor.formatOnSave": true,
+  "solidity.formatter": "prettier",
+  "solidity.linter": "solhint",
+  "[solidity]": {
+    "editor.defaultFormatter": "NomicFoundation.hardhat-solidity",
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "editor.formatOnType": true
+  },
+  "solidity.telemetry": false
 }
