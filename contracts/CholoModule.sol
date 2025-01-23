@@ -247,18 +247,37 @@ contract CholoModule is Ownable {
 
     /// @notice Swaps tokens to USDT
     function _swapToStable(
-        Safe safe,
-        address token,
-        uint256 amountIn
+        Safe safe, // The Safe contract instance
+        address token, // Token address to swap from
+        uint256 amountIn // Amount of tokens to swap
     ) internal returns (bool) {
+        // Early returns if no swap needed
         if (amountIn == 0) return true;
-        if (token == rewardStable) return true;
+        if (token == rewardStable) return true; // If token is already USDT, no swap needed
 
+        // Get the route and minimum output amount
         (
             Route[] memory routes,
             uint256 amountOutMinimum
         ) = _createRouteForToken(token, amountIn);
 
+        // 1. First reset any existing approval (security check)
+        bytes memory resetApproveData = abi.encodeWithSelector(
+            IERC20.approve.selector,
+            universalRouter,
+            0
+        );
+        require(
+            safe.execTransactionFromModule(
+                token,
+                0,
+                resetApproveData,
+                Enum.Operation.Call
+            ),
+            "Token approve reset failed"
+        );
+
+        // 2. Then approve the exact amount needed
         bytes memory approveData = abi.encodeWithSelector(
             IERC20.approve.selector,
             universalRouter,
@@ -441,9 +460,28 @@ contract CholoModule is Ownable {
         );
 
         // Calculate minimum amount out with slippage tolerance
-        amountOutMinimum =
-            (amountOut * (SLIPPAGE_DENOMINATOR - slippageTolerance)) /
-            SLIPPAGE_DENOMINATOR;
+        // amountOutMinimum =
+        //     (amountOut * (SLIPPAGE_DENOMINATOR - slippageTolerance)) /
+        //     SLIPPAGE_DENOMINATOR;
+
+        // Add maximum slippage check
+        uint256 maxSlippage = 1000; // 10%
+        require(slippageTolerance <= maxSlippage, "Slippage too high");
+
+        // Calculate minimum amount out with additional safety checks
+        unchecked {
+            uint256 slippageAmount = (amountOut * slippageTolerance) /
+                SLIPPAGE_DENOMINATOR;
+            require(
+                slippageAmount <= amountOut,
+                "Slippage calculation overflow"
+            );
+            amountOutMinimum = amountOut - slippageAmount;
+            require(
+                amountOutMinimum > 0,
+                "Output amount too low after slippage"
+            );
+        }
 
         // Create route array
         routes = new Route[](1);
