@@ -4,10 +4,10 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@safe-global/safe-contracts/contracts/common/Enum.sol";
-import "@safe-global/safe-contracts/contracts/Safe.sol";
 import "./choloInterfaces.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
+import "./ISafe.sol";
 
 contract CholoModule is Ownable {
     address public rewardToken; // Velo token address
@@ -138,7 +138,7 @@ contract CholoModule is Ownable {
 
     /// @notice Handles unstaking from gauge if position is staked
     function _handleUnstake(
-        Safe safe,
+        ISafe safe,
         address gauge,
         uint256 tokenId
     ) internal {
@@ -177,7 +177,7 @@ contract CholoModule is Ownable {
 
     /// @notice Decreases liquidity and returns new token amounts
     function _decreaseLiquidity(
-        Safe safe,
+        ISafe safe,
         address manager,
         uint256 tokenId,
         uint128 liquidity,
@@ -236,7 +236,7 @@ contract CholoModule is Ownable {
 
     /// @notice Collects fees from position
     function _collectFees(
-        Safe safe,
+        ISafe safe,
         address manager,
         uint256 tokenId,
         uint128 initialTokensOwed0,
@@ -268,7 +268,7 @@ contract CholoModule is Ownable {
 
     /// @notice Swaps tokens to USDT using the stored path
     function _swapToStable(
-        Safe safe,
+        ISafe safe,
         address token,
         uint256 amountIn
     ) internal returns (bool) {
@@ -338,9 +338,12 @@ contract CholoModule is Ownable {
 
     /// @notice Main function to withdraw liquidity and collect fees
     function withdrawAndCollect(address manager, uint256 tokenId) external {
-        require(approvedManagers[manager], "Manager not approved");
+        require(
+            approvedManagers[manager],
+            "Manager not approved for this module"
+        );
 
-        Safe safe = Safe(payable(msg.sender));
+        ISafe safe = ISafe(payable(msg.sender));
         INonfungiblePositionManager nftManager = INonfungiblePositionManager(
             manager
         );
@@ -440,7 +443,7 @@ contract CholoModule is Ownable {
     }
 
     function _burnPosition(
-        Safe safe,
+        ISafe safe,
         address manager,
         uint256 tokenId
     ) internal {
