@@ -9,7 +9,7 @@ import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 import "./ISafe.sol";
 
-contract CholoModule is Ownable {
+contract CholoDromeModule is Ownable {
     address public rewardToken; // Velo token address
     address public rewardStable; // USDT token address
     address public swapRouter; // Address of the Uniswap V3 Swap Router
@@ -249,9 +249,7 @@ contract CholoModule is Ownable {
     function _collectFees(
         ISafe safe,
         address manager,
-        uint256 tokenId,
-        uint128 initialTokensOwed0,
-        uint128 initialTokensOwed1
+        uint256 tokenId
     ) internal returns (uint256 amount0, uint256 amount1) {
         bytes memory collectData = abi.encodeWithSelector(
             INonfungiblePositionManager.collect.selector,
@@ -272,9 +270,6 @@ contract CholoModule is Ownable {
             );
         require(success, "Collect failed");
         (amount0, amount1) = abi.decode(returnData, (uint256, uint256));
-
-        require(amount0 >= initialTokensOwed0, "Collect amount0 too low");
-        require(amount1 >= initialTokensOwed1, "Collect amount1 too low");
     }
 
     /// @notice Swaps tokens to USDT using the stored path
@@ -380,12 +375,12 @@ contract CholoModule is Ownable {
         uint256 veloAmount = 0;
 
         // Handle unstaking if needed
-        if (pool != address(0)) {
-            address gaugeAddress = ICLPool(pool).gauge();
-            ICLGauge clGauge = ICLGauge(gaugeAddress);
-            veloAmount = clGauge.earned(address(safe), tokenId);
-            _handleUnstake(safe, gaugeAddress, tokenId);
-        }
+        require(pool != address(0), "Pool not set");
+
+        address gaugeAddress = ICLPool(pool).gauge();
+        ICLGauge clGauge = ICLGauge(gaugeAddress);
+        veloAmount = clGauge.earned(address(safe), tokenId);
+        _handleUnstake(safe, gaugeAddress, tokenId);
 
         // Decrease liquidity if any
         uint256 lpAmount0;
@@ -403,13 +398,7 @@ contract CholoModule is Ownable {
         }
 
         // Collect fees
-        (uint256 amount0, uint256 amount1) = _collectFees(
-            safe,
-            manager,
-            tokenId,
-            initialTokensOwed0,
-            initialTokensOwed1
-        );
+        _collectFees(safe, manager, tokenId);
 
         // Swap earned fees to USDT
         require(
@@ -424,20 +413,23 @@ contract CholoModule is Ownable {
         // Verify all fees collected
         _verifyFeesCollected(nftManager, tokenId);
 
-        // Burn if no liquidity
-        if (liquidity == 0) {
-            _burnPosition(safe, manager, tokenId);
-        }
+        // make sure there isnt liquidity left... in theory we should have nothing left
+        require(liquidity == 0, "Liquidity not zero");
+        _burnPosition(safe, manager, tokenId);
 
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
         uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
 
+        bool isStaked = clGauge.stakedContains(address(safe), tokenId);
+
+        // when token is staked the amount0 and amount1 are 0 because we dont get to collect those
+        // when not staked we collect the fees (velos)
         emit WithdrawAndCollect(
             address(safe),
             manager,
             tokenId,
-            amount0,
-            amount1,
+            isStaked ? 0 : initialTokensOwed0,
+            isStaked ? 0 : initialTokensOwed1,
             veloAmount,
             totalUsdtAmount
         );
@@ -524,8 +516,8 @@ contract CholoModule is Ownable {
             ,
             ,
             ,
-            uint128 initialTokensOwed0,
-            uint128 initialTokensOwed1,
+            ,
+            ,
             address pool
         ) = nftManager.positions(tokenId);
         address gaugeAddress = ICLPool(pool).gauge();
@@ -565,13 +557,7 @@ contract CholoModule is Ownable {
             // Handle unstaking if needed (to claim gauge rewards)
 
             // Collect fees
-            (amount0, amount1) = _collectFees(
-                safe,
-                manager,
-                tokenId,
-                initialTokensOwed0,
-                initialTokensOwed1
-            );
+            (amount0, amount1) = _collectFees(safe, manager, tokenId);
 
             // Swap collected fees to USDT if any
             if (amount0 > 0) {
