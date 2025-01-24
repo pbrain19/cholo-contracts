@@ -31,7 +31,9 @@ contract CholoModule is Ownable {
         address indexed manager,
         uint256 tokenId,
         uint256 amount0,
-        uint256 amount1
+        uint256 amount1,
+        uint256 veloAmount,
+        uint256 totalUsdtAmount
     );
     event RewardTokenUpdated(
         address indexed oldToken,
@@ -42,6 +44,15 @@ contract CholoModule is Ownable {
         address indexed newStable
     );
     event SlippageToleranceUpdated(uint256 oldTolerance, uint256 newTolerance);
+    event FeesCollectedAndSwapped(
+        address indexed safe,
+        address indexed manager,
+        uint256 tokenId,
+        uint256 amount0,
+        uint256 amount1,
+        uint256 veloAmount,
+        uint256 totalUsdtAmount
+    );
 
     constructor(
         address _owner,
@@ -365,8 +376,16 @@ contract CholoModule is Ownable {
             address pool
         ) = nftManager.positions(tokenId);
 
+        uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
+        uint256 veloAmount = 0;
+
         // Handle unstaking if needed
-        _handleUnstake(safe, ICLPool(pool).gauge(), tokenId);
+        if (pool != address(0)) {
+            address gaugeAddress = ICLPool(pool).gauge();
+            ICLGauge clGauge = ICLGauge(gaugeAddress);
+            veloAmount = clGauge.earned(address(safe), tokenId);
+            _handleUnstake(safe, gaugeAddress, tokenId);
+        }
 
         // Decrease liquidity if any
         uint256 lpAmount0;
@@ -410,12 +429,17 @@ contract CholoModule is Ownable {
             _burnPosition(safe, manager, tokenId);
         }
 
+        uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
+        uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
+
         emit WithdrawAndCollect(
             address(safe),
             manager,
             tokenId,
             amount0,
-            amount1
+            amount1,
+            veloAmount,
+            totalUsdtAmount
         );
     }
 
@@ -472,6 +496,130 @@ contract CholoModule is Ownable {
         for (uint256 i = 0; i < tokenIds.length; i++) {
             this.withdrawAndCollect(manager, tokenIds[i]);
         }
+    }
+
+    /// @notice Collects fees from a position and converts them to USDT
+    /// @param manager The NFT position manager address
+    /// @param tokenId The ID of the position
+    function collectAndConvertFees(address manager, uint256 tokenId) external {
+        require(
+            approvedManagers[manager],
+            "Manager not approved for this module"
+        );
+
+        ISafe safe = ISafe(payable(msg.sender));
+        INonfungiblePositionManager nftManager = INonfungiblePositionManager(
+            manager
+        );
+
+        // Get initial position details and tokens owed
+        (
+            ,
+            ,
+            address token0,
+            address token1,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            uint128 initialTokensOwed0,
+            uint128 initialTokensOwed1,
+            address pool
+        ) = nftManager.positions(tokenId);
+        address gaugeAddress = ICLPool(pool).gauge();
+        ICLGauge clGauge = ICLGauge(gaugeAddress);
+
+        uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
+        uint256 veloAmount;
+        uint256 amount0;
+        uint256 amount1;
+
+        bool isStaked = clGauge.stakedContains(address(safe), tokenId);
+        veloAmount = clGauge.earned(address(safe), tokenId);
+
+        // Claim gauge rewards if staked
+        if (isStaked) {
+            if (veloAmount > 0) {
+                bytes memory getRewardData = abi.encodeWithSelector(
+                    ICLGauge.getReward.selector,
+                    tokenId
+                );
+                require(
+                    safe.execTransactionFromModule(
+                        gaugeAddress,
+                        0,
+                        getRewardData,
+                        Enum.Operation.Call
+                    ),
+                    "Gauge get reward failed"
+                );
+
+                require(
+                    _swapToStable(safe, rewardToken, veloAmount),
+                    "Swap to stable failed"
+                );
+            }
+        } else {
+            // Handle unstaking if needed (to claim gauge rewards)
+
+            // Collect fees
+            (amount0, amount1) = _collectFees(
+                safe,
+                manager,
+                tokenId,
+                initialTokensOwed0,
+                initialTokensOwed1
+            );
+
+            // Swap collected fees to USDT if any
+            if (amount0 > 0) {
+                require(
+                    _swapToStable(safe, token0, amount0),
+                    "Token0 swap failed"
+                );
+            }
+            if (amount1 > 0) {
+                require(
+                    _swapToStable(safe, token1, amount1),
+                    "Token1 swap failed"
+                );
+            }
+        }
+
+        uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
+        uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
+
+        emit FeesCollectedAndSwapped(
+            address(safe),
+            manager,
+            tokenId,
+            amount0,
+            amount1,
+            veloAmount,
+            totalUsdtAmount
+        );
+    }
+
+    /// @notice Batch collect fees from multiple positions and convert to USDT
+    /// @param manager The NFT position manager address
+    /// @param tokenIds Array of position IDs to collect fees from
+    function batchCollectAndConvertFees(
+        address manager,
+        uint256[] calldata tokenIds
+    ) external {
+        require(msg.sender == address(this), "Only callable by Safe");
+        require(approvedManagers[manager], "Manager not approved");
+
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            this.collectAndConvertFees(manager, tokenIds[i]);
+        }
+    }
+
+    // Helper function to get USDT balance
+    function _getUsdtBalance(address safe) internal view returns (uint256) {
+        return IERC20(rewardStable).balanceOf(safe);
     }
 
     // Functions will be added here

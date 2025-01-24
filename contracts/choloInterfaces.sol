@@ -23,6 +23,11 @@ interface ICLGauge {
     ) external view returns (uint256);
 
     function withdraw(uint256 tokenId) external;
+
+    /// @notice Retrieve rewards for a tokenId
+    /// @dev Throws if not called by the position owner
+    /// @param tokenId The tokenId of the position
+    function getReward(uint256 tokenId) external;
 }
 
 interface INonfungiblePositionManager {
