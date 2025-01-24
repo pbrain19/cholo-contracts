@@ -7,6 +7,7 @@
   "dependencies": {
     "@openzeppelin/contracts": "^5.2.0",
     "@safe-global/safe-contracts": "^1.4.1-2",
+    "@uniswap/v3-periphery": "^1.4.4",
     "hardhat-dependency-compiler": "^1.2.1"
   },
   "overrides": {

@@ -6,11 +6,13 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 import "@safe-global/safe-contracts/contracts/common/Enum.sol";
 import "@safe-global/safe-contracts/contracts/Safe.sol";
 import "./choloInterfaces.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
+import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 
 contract CholoModule is Ownable {
     address public rewardToken; // Velo token address
     address public rewardStable; // USDT token address
-    address public universalRouter;
+    address public swapRouter; // Address of the Uniswap V3 Swap Router
     address public quoter;
 
     uint256 private constant SLIPPAGE_DENOMINATOR = 10000;
@@ -18,6 +20,9 @@ contract CholoModule is Ownable {
 
     // Mapping of Safe => NFT Position Manager => is approved
     mapping(address => mapping(address => bool)) public approvedManagers;
+
+    // Mapping to store encoded paths for swaps between two tokens
+    mapping(address => mapping(address => bytes)) public swapPaths;
 
     event ManagerApproved(address indexed safe, address indexed manager);
     event ManagerRemoved(address indexed safe, address indexed manager);
@@ -43,18 +48,18 @@ contract CholoModule is Ownable {
         address _owner,
         address _rewardToken,
         address _rewardStable,
-        address _universalRouter,
-        address _quoter
+        address _quoter,
+        address _swapRouter
     ) Ownable(_owner) {
         require(_owner != address(0), "Invalid owner");
         require(_rewardToken != address(0), "Invalid reward token");
         require(_rewardStable != address(0), "Invalid reward stable");
-        require(_universalRouter != address(0), "Invalid router");
         require(_quoter != address(0), "Invalid quoter");
+        require(_swapRouter != address(0), "Invalid swap router");
         rewardToken = _rewardToken;
         rewardStable = _rewardStable;
-        universalRouter = _universalRouter;
         quoter = _quoter;
+        swapRouter = _swapRouter;
     }
 
     /// @notice Set the slippage tolerance for swaps
@@ -115,6 +120,34 @@ contract CholoModule is Ownable {
         address oldStable = rewardStable;
         rewardStable = _newRewardStable;
         emit RewardStableUpdated(oldStable, _newRewardStable);
+    }
+
+    /// @notice Update the encoded path for swaps between two tokens
+    /// @dev Can only be called by the owner
+    /// @param fromToken The address of the token to swap from
+    /// @param toToken The address of the token to swap to
+    /// @param path The encoded path for the swap
+    function setSwapPath(
+        address fromToken,
+        address toToken,
+        bytes calldata path
+    ) external onlyOwner {
+        require(fromToken != address(0), "Invalid fromToken");
+        require(toToken != address(0), "Invalid toToken");
+        require(path.length > 0, "Invalid path");
+        swapPaths[fromToken][toToken] = path;
+    }
+
+    /// @notice Retrieve the swap path for a given token pair
+    /// @param fromToken The address of the token to swap from
+    /// @param toToken The address of the token to swap to
+    /// @return path The encoded path for the swap
+    function _getSwapPath(
+        address fromToken,
+        address toToken
+    ) internal view returns (bytes memory path) {
+        path = swapPaths[fromToken][toToken];
+        require(path.length > 0, "Swap path not set");
     }
 
     /// @notice Handles unstaking from gauge if position is staked
@@ -245,7 +278,7 @@ contract CholoModule is Ownable {
         require(amount1 >= initialTokensOwed1, "Collect amount1 too low");
     }
 
-    /// @notice Swaps tokens to USDT
+    /// @notice Swaps tokens to USDT using the stored path
     function _swapToStable(
         Safe safe,
         address token,
@@ -254,14 +287,12 @@ contract CholoModule is Ownable {
         if (amountIn == 0) return true;
         if (token == rewardStable) return true;
 
-        (
-            Route[] memory routes,
-            uint256 amountOutMinimum
-        ) = _createRouteForToken(token, amountIn);
+        bytes memory path = _getSwapPath(token, rewardStable);
 
+        // Approve the swap router to spend the input token
         bytes memory approveData = abi.encodeWithSelector(
             IERC20.approve.selector,
-            universalRouter,
+            swapRouter,
             amountIn
         );
         require(
@@ -274,33 +305,47 @@ contract CholoModule is Ownable {
             "Token approve failed"
         );
 
-        bytes memory swapData = abi.encode(
-            address(safe),
-            amountIn,
-            amountOutMinimum,
-            routes,
-            false
-        );
+        // Calculate minimum amount out with slippage tolerance
+        uint256 amountOutMinimum = _calculateAmountOutMinimum(token, amountIn);
 
-        bytes[] memory inputs = new bytes[](1);
-        inputs[0] = swapData;
+        // Create the swap parameters
+        ISwapRouter.ExactInputParams memory params = ISwapRouter
+            .ExactInputParams({
+                path: path,
+                recipient: address(safe),
+                deadline: block.timestamp + 300, // 5-minute deadline
+                amountIn: amountIn,
+                amountOutMinimum: amountOutMinimum
+            });
 
-        bytes memory commands = new bytes(1);
-        commands[0] = bytes1(uint8(0x08)); // V2_SWAP_EXACT_IN
-
-        bytes memory routerData = abi.encodeWithSelector(
-            IUniversalRouter.execute.selector,
-            commands,
-            inputs
+        // Execute the swap
+        bytes memory swapData = abi.encodeWithSelector(
+            ISwapRouter.exactInput.selector,
+            params
         );
 
         return
             safe.execTransactionFromModule(
-                universalRouter,
+                swapRouter,
                 0,
-                routerData,
+                swapData,
                 Enum.Operation.Call
             );
+    }
+
+    /// @notice Calculate the minimum amount out with slippage tolerance
+    function _calculateAmountOutMinimum(
+        address token,
+        uint256 amountIn
+    ) internal returns (uint256) {
+        // Use the quoter to get the expected output amount
+        bytes memory path = _getSwapPath(token, rewardStable);
+        uint256 amountOut = IQuoter(quoter).quoteExactInput(path, amountIn);
+
+        // Calculate minimum amount out with slippage tolerance
+        return
+            (amountOut * (SLIPPAGE_DENOMINATOR - slippageTolerance)) /
+            SLIPPAGE_DENOMINATOR;
     }
 
     /// @notice Main function to withdraw liquidity and collect fees
@@ -419,41 +464,6 @@ contract CholoModule is Ownable {
             amount0,
             amount1
         );
-    }
-
-    function _createRouteForToken(
-        address fromToken,
-        uint256 amountIn
-    ) internal returns (Route[] memory routes, uint256 amountOutMinimum) {
-        require(fromToken != rewardStable, "Cannot swap USDT to USDT");
-
-        // Create path for the swap (fromToken -> USDT)
-        bytes memory path = abi.encodePacked(
-            fromToken,
-            uint24(4194304), // Use volatile V2 pool (0x400000)
-            rewardStable
-        );
-
-        // Query the quoter for the expected output and optimal route
-        (uint256 amountOut, , , ) = IMixedRouteQuoterV1(quoter).quoteExactInput(
-            path,
-            amountIn
-        );
-
-        // Calculate minimum amount out with slippage tolerance
-        amountOutMinimum =
-            (amountOut * (SLIPPAGE_DENOMINATOR - slippageTolerance)) /
-            SLIPPAGE_DENOMINATOR;
-
-        // Create route array
-        routes = new Route[](1);
-        routes[0] = Route({
-            from: fromToken,
-            to: rewardStable,
-            stable: false // Use volatile pool
-        });
-
-        return (routes, amountOutMinimum);
     }
 
     function approveManager(address manager) external {

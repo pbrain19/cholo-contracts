@@ -72,27 +72,3 @@ interface INonfungiblePositionManager {
 
     function burn(uint256 tokenId) external;
 }
-
-interface IMixedRouteQuoterV1 {
-    /// @notice Returns the amount out received for a given exact input swap without executing the swap
-    /// @dev These functions are not marked view because they rely on calling non-view functions and reverting
-    /// to compute the result. They are also not gas efficient and should not be called on-chain.
-    function quoteExactInput(
-        bytes memory path,
-        uint256 amountIn
-    )
-        external
-        returns (
-            uint256 amountOut,
-            uint160[] memory v3SqrtPriceX96AfterList,
-            uint32[] memory v3InitializedTicksCrossedList,
-            uint256 v3SwapGasEstimate
-        );
-}
-
-interface IUniversalRouter {
-    function execute(
-        bytes calldata commands,
-        bytes[] calldata inputs
-    ) external payable;
-}
