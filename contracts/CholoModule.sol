@@ -18,8 +18,8 @@ contract CholoModule is Ownable {
     uint256 private constant SLIPPAGE_DENOMINATOR = 10000;
     uint256 public slippageTolerance = 50; // 0.5% default slippage tolerance
 
-    // Mapping of Safe => NFT Position Manager => is approved
-    mapping(address => mapping(address => bool)) public approvedManagers;
+    // Mapping to store approved managers for all safes
+    mapping(address => bool) public approvedManagers;
 
     // Mapping to store encoded paths for swaps between two tokens
     mapping(address => mapping(address => bytes)) public swapPaths;
@@ -30,7 +30,6 @@ contract CholoModule is Ownable {
         address indexed safe,
         address indexed manager,
         uint256 tokenId,
-        bool wasStaked,
         uint256 amount0,
         uint256 amount1
     );
@@ -73,35 +72,22 @@ contract CholoModule is Ownable {
         emit SlippageToleranceUpdated(oldTolerance, _slippageTolerance);
     }
 
-    /// @notice Batch approve multiple NFT position managers for a Safe
+    /// @notice Approve a manager for all safes
     /// @dev Can only be called by the owner
-    /// @param safe The Safe address to approve managers for
-    /// @param managers Array of NFT position manager addresses to approve
-    function batchApproveManagers(
-        address safe,
-        address[] calldata managers
-    ) external onlyOwner {
-        require(safe != address(0), "Invalid safe");
-        for (uint i = 0; i < managers.length; i++) {
-            require(managers[i] != address(0), "Invalid manager");
-            approvedManagers[safe][managers[i]] = true;
-            emit ManagerApproved(safe, managers[i]);
-        }
+    /// @param manager The address of the manager to approve
+    function approveManager(address manager) external onlyOwner {
+        require(manager != address(0), "Invalid manager");
+        approvedManagers[manager] = true;
+        emit ManagerApproved(address(0), manager); // Use address(0) to indicate all safes
     }
 
-    /// @notice Batch remove approval for multiple NFT position managers for a Safe
+    /// @notice Remove approval for a manager for all safes
     /// @dev Can only be called by the owner
-    /// @param safe The Safe address to remove managers from
-    /// @param managers Array of NFT position manager addresses to remove
-    function batchRemoveManagers(
-        address safe,
-        address[] calldata managers
-    ) external onlyOwner {
-        require(safe != address(0), "Invalid safe");
-        for (uint i = 0; i < managers.length; i++) {
-            delete approvedManagers[safe][managers[i]];
-            emit ManagerRemoved(safe, managers[i]);
-        }
+    /// @param manager The address of the manager to remove
+    function removeManager(address manager) external onlyOwner {
+        require(manager != address(0), "Invalid manager");
+        approvedManagers[manager] = false;
+        emit ManagerRemoved(address(0), manager); // Use address(0) to indicate all safes
     }
 
     /// @notice Update the reward token address (Velo)
@@ -155,12 +141,15 @@ contract CholoModule is Ownable {
         Safe safe,
         address gauge,
         uint256 tokenId
-    ) internal returns (bool) {
-        if (gauge == address(0)) return false;
+    ) internal {
+        require(gauge != address(0), "Invalid gauge");
 
         ICLGauge clGauge = ICLGauge(gauge);
         bool isStaked = clGauge.stakedContains(address(safe), tokenId);
         uint256 amount = clGauge.earned(address(safe), tokenId);
+
+        // if not staked nothing to do here just return
+        if (!isStaked) return;
 
         if (isStaked) {
             bytes memory withdrawData = abi.encodeWithSelector(
@@ -184,7 +173,6 @@ contract CholoModule is Ownable {
                 "Swap to stable failed"
             );
         }
-        return isStaked;
     }
 
     /// @notice Decreases liquidity and returns new token amounts
@@ -350,10 +338,7 @@ contract CholoModule is Ownable {
 
     /// @notice Main function to withdraw liquidity and collect fees
     function withdrawAndCollect(address manager, uint256 tokenId) external {
-        require(
-            approvedManagers[msg.sender][manager],
-            "Manager not approved for Safe"
-        );
+        require(approvedManagers[manager], "Manager not approved");
 
         Safe safe = Safe(payable(msg.sender));
         INonfungiblePositionManager nftManager = INonfungiblePositionManager(
@@ -378,17 +363,14 @@ contract CholoModule is Ownable {
         ) = nftManager.positions(tokenId);
 
         // Handle unstaking if needed
-        bool isStaked = _handleUnstake(safe, ICLPool(pool).gauge(), tokenId);
+        _handleUnstake(safe, ICLPool(pool).gauge(), tokenId);
 
-        uint256 amount0;
-        uint256 amount1;
+        // Decrease liquidity if any
         uint256 lpAmount0;
         uint256 lpAmount1;
 
-        // Decrease liquidity if any
         if (liquidity > 0) {
-            uint128 remainingLiquidity;
-            (lpAmount0, lpAmount1, remainingLiquidity) = _decreaseLiquidity(
+            (lpAmount0, lpAmount1, liquidity) = _decreaseLiquidity(
                 safe,
                 manager,
                 tokenId,
@@ -396,11 +378,10 @@ contract CholoModule is Ownable {
                 initialTokensOwed0,
                 initialTokensOwed1
             );
-            liquidity = remainingLiquidity;
         }
 
         // Collect fees
-        (amount0, amount1) = _collectFees(
+        (uint256 amount0, uint256 amount1) = _collectFees(
             safe,
             manager,
             tokenId,
@@ -419,65 +400,63 @@ contract CholoModule is Ownable {
         );
 
         // Verify all fees collected
-        {
-            (
-                ,
-                ,
-                ,
-                ,
-                ,
-                ,
-                ,
-                ,
-                ,
-                ,
-                uint128 tokensOwed0,
-                uint128 tokensOwed1,
-
-            ) = nftManager.positions(tokenId);
-            require(tokensOwed0 == 0, "Uncollected token0 fees");
-            require(tokensOwed1 == 0, "Uncollected token1 fees");
-        }
+        _verifyFeesCollected(nftManager, tokenId);
 
         // Burn if no liquidity
         if (liquidity == 0) {
-            bytes memory burnData = abi.encodeWithSelector(
-                INonfungiblePositionManager.burn.selector,
-                tokenId
-            );
-            require(
-                safe.execTransactionFromModule(
-                    manager,
-                    0,
-                    burnData,
-                    Enum.Operation.Call
-                ),
-                "Burn failed"
-            );
+            _burnPosition(safe, manager, tokenId);
         }
 
         emit WithdrawAndCollect(
             address(safe),
             manager,
             tokenId,
-            isStaked,
             amount0,
             amount1
         );
     }
 
-    function approveManager(address manager) external {
-        require(msg.sender == address(this), "Only callable by Safe");
-        require(manager != address(0), "Invalid manager");
-        approvedManagers[msg.sender][manager] = true;
-        emit ManagerApproved(msg.sender, manager);
+    function _verifyFeesCollected(
+        INonfungiblePositionManager nftManager,
+        uint256 tokenId
+    ) internal view {
+        (
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            uint128 tokensOwed0,
+            uint128 tokensOwed1,
+
+        ) = nftManager.positions(tokenId);
+        require(tokensOwed0 == 0, "Uncollected token0 fees");
+        require(tokensOwed1 == 0, "Uncollected token1 fees");
     }
 
-    function removeManager(address manager) external {
-        require(msg.sender == address(this), "Only callable by Safe");
-        require(manager != address(0), "Invalid manager");
-        approvedManagers[msg.sender][manager] = false;
-        emit ManagerRemoved(msg.sender, manager);
+    function _burnPosition(
+        Safe safe,
+        address manager,
+        uint256 tokenId
+    ) internal {
+        bytes memory burnData = abi.encodeWithSelector(
+            INonfungiblePositionManager.burn.selector,
+            tokenId
+        );
+        require(
+            safe.execTransactionFromModule(
+                manager,
+                0,
+                burnData,
+                Enum.Operation.Call
+            ),
+            "Burn failed"
+        );
     }
 
     function batchWithdrawAndCollect(
@@ -485,7 +464,7 @@ contract CholoModule is Ownable {
         uint256[] calldata tokenIds
     ) external {
         require(msg.sender == address(this), "Only callable by Safe");
-        require(approvedManagers[msg.sender][manager], "Manager not approved");
+        require(approvedManagers[manager], "Manager not approved");
 
         for (uint256 i = 0; i < tokenIds.length; i++) {
             this.withdrawAndCollect(manager, tokenIds[i]);
