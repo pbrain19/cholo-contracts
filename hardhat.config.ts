@@ -1,7 +1,10 @@
+import dotenv from "dotenv";
+
 import type { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox-viem";
-import "hardhat-dependency-compiler";
-import "@nomiclabs/hardhat-waffle";
+
+// Load environment variables from the .env file
+dotenv.config();
 
 const config: HardhatUserConfig = {
   solidity: {
@@ -18,11 +21,25 @@ const config: HardhatUserConfig = {
     hardhat: {
       allowUnlimitedContractSize: true,
     },
+
+    optimism: {
+      url: "https://mainnet.optimism.io/",
+      accounts: [process.env.PRIVATE_KEY!],
+    },
   },
-  dependencyCompiler: {
-    paths: [
-      "@safe-global/safe-contracts/contracts/proxies/SafeProxyFactory.sol",
-    ],
+
+  sourcify: {
+    enabled: true,
+  },
+
+  etherscan: {
+    apiKey: process.env.ETHERSCAN_API_KEY!,
+  },
+  gasReporter: {
+    coinmarketcap: process.env.COINMARKETCAP_API_KEY!,
+    enabled: true,
+    currency: "USD",
+    token: "op",
   },
 };
 
