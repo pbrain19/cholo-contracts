@@ -8,20 +8,40 @@ struct Route {
 }
 
 interface ICLPool {
+    /// @notice The gauge corresponding to this pool
+    /// @return The gauge contract address
     function gauge() external view returns (address);
+
+    /// @notice The nft manager
+    /// @return The nft manager contract address
+    function nft() external view returns (address);
 }
 
 interface ICLGauge {
+    /// @notice Check whether a position is staked in the gauge by a certain user
+    /// @param depositor The address of the user
+    /// @param tokenId The tokenId of the position
+    /// @return Whether the position is staked in the gauge
     function stakedContains(
         address depositor,
         uint256 tokenId
     ) external view returns (bool);
 
+    /// @notice Returns the claimable rewards for a given account and tokenId
+    /// @dev Throws if account is not the position owner
+    /// @dev pool.updateRewardsGrowthGlobal() needs to be called first, to return the correct claimable rewards
+    /// @param account The address of the user
+    /// @param tokenId The tokenId of the position
+    /// @return The amount of claimable reward
     function earned(
         address account,
         uint256 tokenId
     ) external view returns (uint256);
 
+    /// @notice Used to withdraw a CL position from the gauge
+    /// @notice Allows the user to receive fees instead of emissions
+    /// @notice Outstanding emissions will be collected on withdrawal
+    /// @param tokenId The tokenId of the position
     function withdraw(uint256 tokenId) external;
 
     /// @notice Retrieve rewards for a tokenId
@@ -63,13 +83,24 @@ interface INonfungiblePositionManager {
             uint256 feeGrowthInside0LastX128,
             uint256 feeGrowthInside1LastX128,
             uint128 tokensOwed0,
-            uint128 tokensOwed1,
-            address pool
+            uint128 tokensOwed1
         );
 
+    /// @notice Decreases the amount of liquidity in a position and accounts it to the position
+    /// @param params tokenId The ID of the token for which liquidity is being decreased,
+    /// amount The amount by which liquidity will be decreased,
+    /// amount0Min The minimum amount of token0 that should be accounted for the burned liquidity,
+    /// amount1Min The minimum amount of token1 that should be accounted for the burned liquidity,
+    /// deadline The time by which the transaction must be included to effect the change
+    /// @return amount0 The amount of token0 accounted to the position's tokens owed
+    /// @return amount1 The amount of token1 accounted to the position's tokens owed
+    /// @dev The use of this function can cause a loss to users of the NonfungiblePositionManager
+    /// @dev for tokens that have very high decimals.
+    /// @dev The amount of tokens necessary for the loss is: 3.4028237e+38.
+    /// @dev This is equivalent to 1e20 value with 18 decimals.
     function decreaseLiquidity(
         DecreaseLiquidityParams calldata params
-    ) external returns (uint256 amount0, uint256 amount1);
+    ) external payable returns (uint256 amount0, uint256 amount1);
 
     /// @notice Collects up to a maximum amount of fees owed to a specific position to the recipient
     /// @notice Used to update staked positions before deposit and withdraw
@@ -83,5 +114,8 @@ interface INonfungiblePositionManager {
         CollectParams calldata params
     ) external returns (uint256 amount0, uint256 amount1);
 
-    function burn(uint256 tokenId) external;
+    /// @notice Burns a token ID, which deletes it from the NFT contract. The token must have 0 liquidity and all tokens
+    /// must be collected first.
+    /// @param tokenId The ID of the token that is being burned
+    function burn(uint256 tokenId) external payable;
 }

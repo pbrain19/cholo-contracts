@@ -18,17 +18,17 @@ contract CholoDromeModule is Ownable {
     uint256 private constant SLIPPAGE_DENOMINATOR = 10000;
     uint256 public slippageTolerance = 50; // 0.5% default slippage tolerance
 
-    // Mapping to store approved managers for all safes
-    mapping(address => bool) public approvedManagers;
+    // Mapping to store approved pools
+    mapping(address => bool) public approvedPools;
 
     // Mapping to store encoded paths for swaps between two tokens
     mapping(address => mapping(address => bytes)) public swapPaths;
 
-    event ManagerApproved(address indexed safe, address indexed manager);
-    event ManagerRemoved(address indexed safe, address indexed manager);
+    event PoolApproved(address indexed safe, address indexed pool);
+    event PoolRemoved(address indexed safe, address indexed pool);
     event WithdrawAndCollect(
         address indexed safe,
-        address indexed manager,
+        address indexed pool,
         uint256 tokenId,
         uint256 amount0,
         uint256 amount1,
@@ -46,7 +46,7 @@ contract CholoDromeModule is Ownable {
     event SlippageToleranceUpdated(uint256 oldTolerance, uint256 newTolerance);
     event FeesCollectedAndSwapped(
         address indexed safe,
-        address indexed manager,
+        address indexed pool,
         uint256 tokenId,
         uint256 amount0,
         uint256 amount1,
@@ -83,22 +83,22 @@ contract CholoDromeModule is Ownable {
         emit SlippageToleranceUpdated(oldTolerance, _slippageTolerance);
     }
 
-    /// @notice Approve a manager for all safes
+    /// @notice Approve a pool for all safes
     /// @dev Can only be called by the owner
-    /// @param manager The address of the manager to approve
-    function approveManager(address manager) external onlyOwner {
-        require(manager != address(0), "Invalid manager");
-        approvedManagers[manager] = true;
-        emit ManagerApproved(address(0), manager); // Use address(0) to indicate all safes
+    /// @param pool The address of the pool to approve
+    function approvePool(address pool) external onlyOwner {
+        require(pool != address(0), "Invalid pool");
+        approvedPools[pool] = true;
+        emit PoolApproved(address(0), pool); // Use address(0) to indicate all safes
     }
 
-    /// @notice Remove approval for a manager for all safes
+    /// @notice Remove approval for a pool for all safes
     /// @dev Can only be called by the owner
-    /// @param manager The address of the manager to remove
-    function removeManager(address manager) external onlyOwner {
-        require(manager != address(0), "Invalid manager");
-        approvedManagers[manager] = false;
-        emit ManagerRemoved(address(0), manager); // Use address(0) to indicate all safes
+    /// @param pool The address of the pool to remove
+    function removePool(address pool) external onlyOwner {
+        require(pool != address(0), "Invalid pool");
+        approvedPools[pool] = false;
+        emit PoolRemoved(address(0), pool); // Use address(0) to indicate all safes
     }
 
     /// @notice Update the reward token address (Velo)
@@ -189,7 +189,7 @@ contract CholoDromeModule is Ownable {
     /// @notice Decreases liquidity and returns new token amounts
     function _decreaseLiquidity(
         ISafe safe,
-        address manager,
+        address nftManager,
         uint256 tokenId,
         uint128 liquidity,
         uint128 initialTokensOwed0,
@@ -214,7 +214,7 @@ contract CholoDromeModule is Ownable {
         );
         require(
             safe.execTransactionFromModule(
-                manager,
+                nftManager,
                 0,
                 decreaseData,
                 Enum.Operation.Call
@@ -236,9 +236,8 @@ contract CholoDromeModule is Ownable {
                 ,
                 ,
                 uint128 tokensOwed0,
-                uint128 tokensOwed1,
-
-            ) = INonfungiblePositionManager(manager).positions(tokenId);
+                uint128 tokensOwed1
+            ) = INonfungiblePositionManager(nftManager).positions(tokenId);
             remainingLiquidity = liq;
             lpAmount0 = tokensOwed0 - initialTokensOwed0;
             lpAmount1 = tokensOwed1 - initialTokensOwed1;
@@ -248,7 +247,7 @@ contract CholoDromeModule is Ownable {
     /// @notice Collects fees from position
     function _collectFees(
         ISafe safe,
-        address manager,
+        address nftManager,
         uint256 tokenId
     ) internal returns (uint256 amount0, uint256 amount1) {
         bytes memory collectData = abi.encodeWithSelector(
@@ -263,7 +262,7 @@ contract CholoDromeModule is Ownable {
 
         (bool success, bytes memory returnData) = safe
             .execTransactionFromModuleReturnData(
-                manager,
+                nftManager,
                 0,
                 collectData,
                 Enum.Operation.Call
@@ -343,16 +342,14 @@ contract CholoDromeModule is Ownable {
     }
 
     /// @notice Main function to withdraw liquidity and collect fees
-    function withdrawAndCollect(address manager, uint256 tokenId) external {
-        require(
-            approvedManagers[manager],
-            "Manager not approved for this module"
-        );
+    function withdrawAndCollect(address pool, uint256 tokenId) external {
+        require(approvedPools[pool], "Pool not approved for this module");
 
         ISafe safe = ISafe(payable(msg.sender));
-        INonfungiblePositionManager nftManager = INonfungiblePositionManager(
-            manager
-        );
+        address nftManager = ICLPool(pool).nft();
+        INonfungiblePositionManager nftPositionManager = INonfungiblePositionManager(
+                nftManager
+            );
 
         // Get initial position details
         (
@@ -367,16 +364,13 @@ contract CholoDromeModule is Ownable {
             ,
             ,
             uint128 initialTokensOwed0,
-            uint128 initialTokensOwed1,
-            address pool
-        ) = nftManager.positions(tokenId);
+            uint128 initialTokensOwed1
+        ) = nftPositionManager.positions(tokenId);
 
         uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
         uint256 veloAmount = 0;
 
         // Handle unstaking if needed
-        require(pool != address(0), "Pool not set");
-
         address gaugeAddress = ICLPool(pool).gauge();
         ICLGauge clGauge = ICLGauge(gaugeAddress);
         veloAmount = clGauge.earned(address(safe), tokenId);
@@ -389,7 +383,7 @@ contract CholoDromeModule is Ownable {
         if (liquidity > 0) {
             (lpAmount0, lpAmount1, liquidity) = _decreaseLiquidity(
                 safe,
-                manager,
+                nftManager,
                 tokenId,
                 liquidity,
                 initialTokensOwed0,
@@ -398,7 +392,7 @@ contract CholoDromeModule is Ownable {
         }
 
         // Collect fees
-        _collectFees(safe, manager, tokenId);
+        _collectFees(safe, nftManager, tokenId);
 
         // Swap earned fees to USDT
         require(
@@ -411,11 +405,11 @@ contract CholoDromeModule is Ownable {
         );
 
         // Verify all fees collected
-        _verifyFeesCollected(nftManager, tokenId);
+        _verifyFeesCollected(nftPositionManager, tokenId);
 
         // make sure there isnt liquidity left... in theory we should have nothing left
         require(liquidity == 0, "Liquidity not zero");
-        _burnPosition(safe, manager, tokenId);
+        _burnPosition(safe, nftManager, tokenId);
 
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
         uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
@@ -426,7 +420,7 @@ contract CholoDromeModule is Ownable {
         // when not staked we collect the fees (velos)
         emit WithdrawAndCollect(
             address(safe),
-            manager,
+            pool,
             tokenId,
             isStaked ? 0 : initialTokensOwed0,
             isStaked ? 0 : initialTokensOwed1,
@@ -451,8 +445,7 @@ contract CholoDromeModule is Ownable {
             ,
             ,
             uint128 tokensOwed0,
-            uint128 tokensOwed1,
-
+            uint128 tokensOwed1
         ) = nftManager.positions(tokenId);
         require(tokensOwed0 == 0, "Uncollected token0 fees");
         require(tokensOwed1 == 0, "Uncollected token1 fees");
@@ -460,7 +453,7 @@ contract CholoDromeModule is Ownable {
 
     function _burnPosition(
         ISafe safe,
-        address manager,
+        address nftManager,
         uint256 tokenId
     ) internal {
         bytes memory burnData = abi.encodeWithSelector(
@@ -469,7 +462,7 @@ contract CholoDromeModule is Ownable {
         );
         require(
             safe.execTransactionFromModule(
-                manager,
+                nftManager,
                 0,
                 burnData,
                 Enum.Operation.Call
@@ -478,33 +471,52 @@ contract CholoDromeModule is Ownable {
         );
     }
 
-    function batchWithdrawAndCollect(
-        address manager,
-        uint256[] calldata tokenIds
-    ) external {
-        require(msg.sender == address(this), "Only callable by Safe");
-        require(approvedManagers[manager], "Manager not approved");
+    // 0xebd5311bea1948e1441333976eadcfe5fbda777c
+    // 1191434
+    function collectStaked(address pool, uint256 tokenId) external {
+        require(approvedPools[pool], "Pool not approved for this module");
 
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            this.withdrawAndCollect(manager, tokenIds[i]);
+        ISafe safe = ISafe(payable(msg.sender));
+
+        address gaugeAddress = ICLPool(pool).gauge();
+        ICLGauge clGauge = ICLGauge(gaugeAddress);
+
+        uint256 veloAmount = clGauge.earned(address(safe), tokenId);
+
+        bool isStaked = clGauge.stakedContains(address(safe), tokenId);
+
+        require(isStaked, "Position not staked");
+
+        if (veloAmount > 0) {
+            bytes memory getRewardData = abi.encodeWithSelector(
+                ICLGauge.getReward.selector,
+                tokenId
+            );
+            require(
+                safe.execTransactionFromModule(
+                    gaugeAddress,
+                    0,
+                    getRewardData,
+                    Enum.Operation.Call
+                ),
+                "Gauge get reward failed"
+            );
         }
     }
 
     /// @notice Collects fees from a position and converts them to USDT
-    /// @param manager The NFT position manager address
+    /// @param pool The pool address
     /// @param tokenId The ID of the position
-    function collectAndConvertFees(address manager, uint256 tokenId) external {
-        require(
-            approvedManagers[manager],
-            "Manager not approved for this module"
-        );
+    function collectAndConvertFees(address pool, uint256 tokenId) external {
+        require(approvedPools[pool], "Pool not approved for this module");
 
         ISafe safe = ISafe(payable(msg.sender));
-        INonfungiblePositionManager nftManager = INonfungiblePositionManager(
-            manager
-        );
+        address nftManager = ICLPool(pool).nft();
+        INonfungiblePositionManager nftPositionManager = INonfungiblePositionManager(
+                nftManager
+            );
 
-        // Get initial position details and tokens owed
+        // Get initial position details
         (
             ,
             ,
@@ -517,9 +529,9 @@ contract CholoDromeModule is Ownable {
             ,
             ,
             ,
-            ,
-            address pool
-        ) = nftManager.positions(tokenId);
+
+        ) = nftPositionManager.positions(tokenId);
+
         address gaugeAddress = ICLPool(pool).gauge();
         ICLGauge clGauge = ICLGauge(gaugeAddress);
 
@@ -554,10 +566,8 @@ contract CholoDromeModule is Ownable {
                 );
             }
         } else {
-            // Handle unstaking if needed (to claim gauge rewards)
-
             // Collect fees
-            (amount0, amount1) = _collectFees(safe, manager, tokenId);
+            (amount0, amount1) = _collectFees(safe, nftManager, tokenId);
 
             // Swap collected fees to USDT if any
             if (amount0 > 0) {
@@ -579,28 +589,13 @@ contract CholoDromeModule is Ownable {
 
         emit FeesCollectedAndSwapped(
             address(safe),
-            manager,
+            pool,
             tokenId,
             amount0,
             amount1,
             veloAmount,
             totalUsdtAmount
         );
-    }
-
-    /// @notice Batch collect fees from multiple positions and convert to USDT
-    /// @param manager The NFT position manager address
-    /// @param tokenIds Array of position IDs to collect fees from
-    function batchCollectAndConvertFees(
-        address manager,
-        uint256[] calldata tokenIds
-    ) external {
-        require(msg.sender == address(this), "Only callable by Safe");
-        require(approvedManagers[manager], "Manager not approved");
-
-        for (uint256 i = 0; i < tokenIds.length; i++) {
-            this.collectAndConvertFees(manager, tokenIds[i]);
-        }
     }
 
     // Helper function to get USDT balance

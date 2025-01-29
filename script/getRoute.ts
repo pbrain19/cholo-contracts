@@ -11,7 +11,7 @@ import { ethers } from "ethers";
 import { PATHS_WE_NEED } from "./constants";
 
 // Contract address from deployment
-const DEPLOYED_ADDRESS = "0xBFE395f6e3d18775b419c5e55E14E5f1d6d080e1";
+const DEPLOYED_ADDRESS = "0xfB1Ed30a7fF6AC351ddce4841F9AF7D0550e725c";
 
 async function getRoute(
   tokenIn: string,
@@ -47,7 +47,7 @@ async function getRoute(
     "" // name - not needed for routing
   );
 
-  const amountIn = parseUnits("5", tokenInDecimals);
+  const amountIn = parseUnits("5000", tokenInDecimals);
   // Create currency amount for exact input
   const currencyAmount = CurrencyAmount.fromRawAmount(
     tokenInInstance,
@@ -114,7 +114,7 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       try {
         const path = await getRoute(tokenIn, tokenOut, provider);
 
-        console.log("\nSetting path in contract...");
+        console.log("\nSetting path in contract...", path);
         const tx = await choloDromeModule.setSwapPath(tokenIn, tokenOut, path);
         console.log("Transaction hash:", tx.hash);
 

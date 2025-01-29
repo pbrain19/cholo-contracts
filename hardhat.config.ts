@@ -2,8 +2,7 @@ import dotenv from "dotenv";
 
 import type { HardhatUserConfig } from "hardhat/config";
 import "@nomicfoundation/hardhat-toolbox-viem";
-import "./script/getRoute"; // Import the task
-
+import "./script/getRoute";
 // Load environment variables from the .env file
 dotenv.config();
 
