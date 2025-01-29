@@ -105,17 +105,35 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
     );
 
     for (const { tokenIn, tokenOut } of PATHS_WE_NEED) {
-      // Get the first path from PATHS_WE_NEED
-
       console.log("Getting route for:");
       console.log(`Token In: ${tokenIn}`);
       console.log(`Token Out: ${tokenOut}`);
 
       try {
-        const path = await getRoute(tokenIn, tokenOut, provider);
+        const newPath = await getRoute(tokenIn, tokenOut, provider);
 
-        console.log("\nSetting path in contract...", path);
-        const tx = await choloDromeModule.setSwapPath(tokenIn, tokenOut, path);
+        // Get the existing path from the contract
+        const existingPath = await choloDromeModule.swapPaths(
+          tokenIn,
+          tokenOut
+        );
+
+        // Convert both paths to hex strings for comparison
+        const newPathHex = ethers.utils.hexlify(newPath);
+        const existingPathHex = ethers.utils.hexlify(existingPath);
+
+        // Compare paths
+        if (newPathHex === existingPathHex) {
+          console.log("Path unchanged, skipping update...");
+          continue;
+        }
+
+        console.log("\nSetting new path in contract...", newPath);
+        const tx = await choloDromeModule.setSwapPath(
+          tokenIn,
+          tokenOut,
+          newPath
+        );
         console.log("Transaction hash:", tx.hash);
 
         console.log("Waiting for confirmation...");
