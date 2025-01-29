@@ -5,19 +5,19 @@ import { Protocol } from "@uniswap/router-sdk";
 import { parseUnits } from "viem";
 import { TOKEN_INFO } from "./constants";
 import { task } from "hardhat/config";
-import { ethers } from "ethers";
 import { HardhatRuntimeEnvironment } from "hardhat/types";
+import CholoDromeModule from "../artifacts/contracts/CholoDromeModule.sol/CholoDromeModule.json";
+import { ethers } from "ethers";
+import { PATHS_WE_NEED } from "./constants";
 
-// Define the paths we need
-const PATHS_WE_NEED = [
-  {
-    tokenIn: "0x9560e827af36c94d2ac33a39bce1fe78631088db", // VELO
-    tokenOut: "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", // USDT
-    description: "VELO -> USDT",
-  },
-];
+// Contract address from deployment
+const DEPLOYED_ADDRESS = "0xBFE395f6e3d18775b419c5e55E14E5f1d6d080e1";
 
-async function getRoute(tokenIn: string, tokenOut: string, provider: any) {
+async function getRoute(
+  tokenIn: string,
+  tokenOut: string,
+  provider: ethers.providers.BaseProvider
+) {
   const router = new AlphaRouter({
     chainId: 10, // Optimism
     provider: provider,
@@ -77,6 +77,7 @@ async function getRoute(tokenIn: string, tokenOut: string, provider: any) {
       Currency,
       Currency
     >;
+    console.log(route);
     return encodeRouteToPath(route, false);
   } catch (error) {
     console.error("Failed to get route:", error);
@@ -84,36 +85,45 @@ async function getRoute(tokenIn: string, tokenOut: string, provider: any) {
   }
 }
 
-task("get-routes", "Get Uniswap V3 routes for token pairs").setAction(
+task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
   async (_, hre: HardhatRuntimeEnvironment) => {
     const networkConfig = hre.network.config as { url: string };
     const provider = new ethers.providers.JsonRpcProvider(networkConfig.url);
 
-    // Get the first path from PATHS_WE_NEED
-    const { tokenIn, tokenOut, description } = PATHS_WE_NEED[0];
+    // Get the signer
+    const privateKey = process.env.PRIVATE_KEY;
+    if (!privateKey) {
+      throw new Error("PRIVATE_KEY not found in environment variables");
+    }
+    const wallet = new ethers.Wallet(privateKey, provider);
 
-    console.log("Getting route for:");
-    console.log(`Description: ${description}`);
-    console.log(`Token In: ${tokenIn}`);
-    console.log(`Token Out: ${tokenOut}`);
+    // Get contract instance
+    const choloDromeModule = new ethers.Contract(
+      DEPLOYED_ADDRESS,
+      CholoDromeModule.abi,
+      wallet
+    );
 
-    try {
-      const path = await getRoute(tokenIn, tokenOut, provider);
+    for (const { tokenIn, tokenOut } of PATHS_WE_NEED) {
+      // Get the first path from PATHS_WE_NEED
 
-      console.log("\nEncoded Path:");
-      console.log(path);
+      console.log("Getting route for:");
+      console.log(`Token In: ${tokenIn}`);
+      console.log(`Token Out: ${tokenOut}`);
 
-      // Also show the hex string for easy copying
-      console.log("\nPath as hex string:");
-      console.log(`0x${Buffer.from(path).toString("hex")}`);
+      try {
+        const path = await getRoute(tokenIn, tokenOut, provider);
 
-      // Show how to use this path
-      console.log("\nTo set this path, call setSwapPath with:");
-      console.log(`tokenIn: ${tokenIn}`);
-      console.log(`tokenOut: ${tokenOut}`);
-      console.log(`path: 0x${Buffer.from(path).toString("hex")}`);
-    } catch (error) {
-      console.error("Error getting route:", error);
+        console.log("\nSetting path in contract...");
+        const tx = await choloDromeModule.setSwapPath(tokenIn, tokenOut, path);
+        console.log("Transaction hash:", tx.hash);
+
+        console.log("Waiting for confirmation...");
+        await tx.wait();
+        console.log("Path successfully set in contract!");
+      } catch (error) {
+        console.error("Error:", error);
+      }
     }
   }
 );
