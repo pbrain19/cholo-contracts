@@ -354,8 +354,8 @@ contract CholoDromeModule is Ownable {
             uint128 liquidity,
             ,
             ,
-            uint128 initialTokensOwed0,
-            uint128 initialTokensOwed1
+            ,
+
         ) = nftPositionManager.positions(tokenId);
 
         uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
@@ -375,22 +375,23 @@ contract CholoDromeModule is Ownable {
         if (liquidity > 0) {
             _decreaseLiquidity(safe, nftManager, tokenId, liquidity);
         }
-
+        uint256 amount0;
+        uint256 amount1;
         // Collect fees
-        _collectOwed(safe, nftManager, tokenId);
 
         if (!isStaked) {
-            if (initialTokensOwed0 > 0) {
+            (amount0, amount1) = _collectOwed(safe, nftManager, tokenId);
+            if (amount0 > 0) {
                 // Swap earned fees to USDT
                 require(
-                    _swapToStable(safe, token0, initialTokensOwed0),
+                    _swapToStable(safe, token0, amount0),
                     "Token0 swap failed"
                 );
             }
 
-            if (initialTokensOwed1 > 0) {
+            if (amount1 > 0) {
                 require(
-                    _swapToStable(safe, token1, initialTokensOwed1),
+                    _swapToStable(safe, token1, amount1),
                     "Token1 swap failed"
                 );
             }
@@ -407,8 +408,8 @@ contract CholoDromeModule is Ownable {
             address(safe),
             pool,
             tokenId,
-            initialTokensOwed0,
-            initialTokensOwed1,
+            amount0,
+            amount1,
             veloAmount,
             totalUsdtAmount
         );
@@ -566,8 +567,8 @@ contract CholoDromeModule is Ownable {
             ,
             ,
             ,
-            uint128 tokensOwed0,
-            uint128 tokensOwed1
+            ,
+
         ) = nftPositionManager.positions(tokenId);
 
         // Collect any pending fees before staking
@@ -628,8 +629,8 @@ contract CholoDromeModule is Ownable {
             address(safe),
             pool,
             tokenId,
-            tokensOwed0,
-            tokensOwed1,
+            amount0,
+            amount1,
             0, // No velo rewards yet since we just staked
             totalUsdtAmount
         );
