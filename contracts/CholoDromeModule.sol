@@ -26,7 +26,7 @@ contract CholoDromeModule is Ownable {
 
     event PoolApproved(address indexed safe, address indexed pool);
     event PoolRemoved(address indexed safe, address indexed pool);
-    event WithdrawAndCollect(
+    event EarningsCollected(
         address indexed safe,
         address indexed pool,
         uint256 tokenId,
@@ -44,15 +44,6 @@ contract CholoDromeModule is Ownable {
         address indexed newStable
     );
     event SlippageToleranceUpdated(uint256 oldTolerance, uint256 newTolerance);
-    event FeesCollectedAndSwapped(
-        address indexed safe,
-        address indexed pool,
-        uint256 tokenId,
-        uint256 amount0,
-        uint256 amount1,
-        uint256 veloAmount,
-        uint256 totalUsdtAmount
-    );
 
     constructor(
         address _owner,
@@ -147,8 +138,42 @@ contract CholoDromeModule is Ownable {
         require(path.length > 0, "Swap path not set");
     }
 
+    function unstakeAndCollect(address pool, uint256 tokenId) external {
+        require(approvedPools[pool], "Pool not approved for this module");
+
+        ISafe safe = ISafe(payable(msg.sender));
+        address gaugeAddress = ICLPool(pool).gauge();
+        ICLGauge clGauge = ICLGauge(gaugeAddress);
+        bool isStaked = clGauge.stakedContains(address(safe), tokenId);
+
+        require(isStaked, "Position not staked");
+
+        uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
+
+        _handleUnstakeAndCollect(safe, gaugeAddress, tokenId);
+
+        uint256 veloAmount = clGauge.earned(address(safe), tokenId);
+
+        uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
+        uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
+
+        emit EarningsCollected(
+            address(safe),
+            pool,
+            tokenId,
+            0,
+            0,
+            veloAmount,
+            totalUsdtAmount
+        );
+    }
+
     /// @notice Handles unstaking from gauge if position is staked
-    function handleUnstake(ISafe safe, address gauge, uint256 tokenId) public {
+    function _handleUnstakeAndCollect(
+        ISafe safe,
+        address gauge,
+        uint256 tokenId
+    ) internal {
         require(gauge != address(0), "Invalid gauge");
 
         ICLGauge clGauge = ICLGauge(gauge);
@@ -186,17 +211,8 @@ contract CholoDromeModule is Ownable {
         ISafe safe,
         address nftManager,
         uint256 tokenId,
-        uint128 liquidity,
-        uint128 initialTokensOwed0,
-        uint128 initialTokensOwed1
-    )
-        internal
-        returns (
-            uint256 lpAmount0,
-            uint256 lpAmount1,
-            uint128 remainingLiquidity
-        )
-    {
+        uint128 liquidity
+    ) internal {
         bytes memory decreaseData = abi.encodeWithSelector(
             INonfungiblePositionManager.decreaseLiquidity.selector,
             INonfungiblePositionManager.DecreaseLiquidityParams({
@@ -216,31 +232,11 @@ contract CholoDromeModule is Ownable {
             ),
             "Decrease liquidity failed"
         );
-
-        // Get position details after decreasing liquidity
-        {
-            (
-                ,
-                ,
-                ,
-                ,
-                ,
-                ,
-                ,
-                uint128 liq,
-                ,
-                ,
-                uint128 tokensOwed0,
-                uint128 tokensOwed1
-            ) = INonfungiblePositionManager(nftManager).positions(tokenId);
-            remainingLiquidity = liq;
-            lpAmount0 = tokensOwed0 - initialTokensOwed0;
-            lpAmount1 = tokensOwed1 - initialTokensOwed1;
-        }
     }
 
-    /// @notice Collects fees from position
-    function _collectFees(
+    /// @notice Collects owed tokens from positions.
+    // Which may be earned fees or LP tokens after decreasing liquidity
+    function _collectOwed(
         ISafe safe,
         address nftManager,
         uint256 tokenId
@@ -365,50 +361,41 @@ contract CholoDromeModule is Ownable {
         uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
         uint256 veloAmount = 0;
 
-        // Handle unstaking if needed
         address gaugeAddress = ICLPool(pool).gauge();
-
         ICLGauge clGauge = ICLGauge(gaugeAddress);
-
         bool isStaked = clGauge.stakedContains(address(safe), tokenId);
 
+        // Handle unstaking if needed
         if (isStaked) {
             veloAmount = clGauge.earned(address(safe), tokenId);
-            handleUnstake(safe, gaugeAddress, tokenId);
+            _handleUnstakeAndCollect(safe, gaugeAddress, tokenId);
         }
-        // Decrease liquidity if any
-        uint256 lpAmount0;
-        uint256 lpAmount1;
 
+        // Decrease liquidity if any
         if (liquidity > 0) {
-            (lpAmount0, lpAmount1, liquidity) = _decreaseLiquidity(
-                safe,
-                nftManager,
-                tokenId,
-                liquidity,
-                initialTokensOwed0,
-                initialTokensOwed1
-            );
+            _decreaseLiquidity(safe, nftManager, tokenId, liquidity);
         }
 
         // Collect fees
-        _collectFees(safe, nftManager, tokenId);
+        _collectOwed(safe, nftManager, tokenId);
 
-        // Swap earned fees to USDT
-        require(
-            _swapToStable(safe, token0, initialTokensOwed0),
-            "Token0 swap failed"
-        );
-        require(
-            _swapToStable(safe, token1, initialTokensOwed1),
-            "Token1 swap failed"
-        );
+        if (!isStaked) {
+            if (initialTokensOwed0 > 0) {
+                // Swap earned fees to USDT
+                require(
+                    _swapToStable(safe, token0, initialTokensOwed0),
+                    "Token0 swap failed"
+                );
+            }
 
-        // Verify all fees collected
-        _verifyFeesCollected(nftPositionManager, tokenId);
+            if (initialTokensOwed1 > 0) {
+                require(
+                    _swapToStable(safe, token1, initialTokensOwed1),
+                    "Token1 swap failed"
+                );
+            }
+        }
 
-        // make sure there isnt liquidity left... in theory we should have nothing left
-        require(liquidity == 0, "Liquidity not zero");
         _burnPosition(safe, nftManager, tokenId);
 
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
@@ -416,37 +403,15 @@ contract CholoDromeModule is Ownable {
 
         // when token is staked the amount0 and amount1 are 0 because we dont get to collect those
         // when not staked we collect the fees (velos)
-        emit WithdrawAndCollect(
+        emit EarningsCollected(
             address(safe),
             pool,
             tokenId,
-            isStaked ? 0 : initialTokensOwed0,
-            isStaked ? 0 : initialTokensOwed1,
+            initialTokensOwed0,
+            initialTokensOwed1,
             veloAmount,
             totalUsdtAmount
         );
-    }
-
-    function _verifyFeesCollected(
-        INonfungiblePositionManager nftManager,
-        uint256 tokenId
-    ) internal view {
-        (
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-            uint128 tokensOwed0,
-            uint128 tokensOwed1
-        ) = nftManager.positions(tokenId);
-        require(tokensOwed0 == 0, "Uncollected token0 fees");
-        require(tokensOwed1 == 0, "Uncollected token1 fees");
     }
 
     function _burnPosition(
@@ -532,7 +497,7 @@ contract CholoDromeModule is Ownable {
             }
         } else {
             // Collect fees
-            (amount0, amount1) = _collectFees(safe, nftManager, tokenId);
+            (amount0, amount1) = _collectOwed(safe, nftManager, tokenId);
 
             // Swap collected fees to USDT if any
             if (amount0 > 0) {
@@ -552,7 +517,7 @@ contract CholoDromeModule is Ownable {
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
         uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
 
-        emit FeesCollectedAndSwapped(
+        emit EarningsCollected(
             address(safe),
             pool,
             tokenId,

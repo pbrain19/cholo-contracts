@@ -27,6 +27,11 @@ interface ICLGauge {
         uint256 tokenId
     ) external view returns (bool);
 
+    /// @notice Used to deposit a CL position into the gauge
+    /// @notice Allows the user to receive emissions instead of fees
+    /// @param tokenId The tokenId of the position
+    function deposit(uint256 tokenId) external;
+
     /// @notice Returns the claimable rewards for a given account and tokenId
     /// @dev Throws if account is not the position owner
     /// @dev pool.updateRewardsGrowthGlobal() needs to be called first, to return the correct claimable rewards
