@@ -23,7 +23,7 @@ const config: HardhatUserConfig = {
     },
 
     optimism: {
-      url: "https://mainnet.optimism.io/",
+      url: process.env.PROVIDER_URL!,
       accounts: [process.env.PRIVATE_KEY!],
     },
   },
