@@ -11,7 +11,7 @@ import { ethers } from "ethers";
 import { PATHS_WE_NEED } from "./constants";
 
 // Contract address from deployment
-const DEPLOYED_ADDRESS = "0x9D6cf6B297B43480d73E8AcaB797169bf84889F9";
+const DEPLOYED_ADDRESS = "0x851CA80DD2d05753d169a2392BDCA69291ed9d2D";
 
 async function getRoute(
   tokenIn: string,

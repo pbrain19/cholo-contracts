@@ -371,15 +371,11 @@ contract CholoDromeModule is Ownable {
             _handleUnstakeAndCollect(safe, gaugeAddress, tokenId);
         }
 
-        // Decrease liquidity if any
-        if (liquidity > 0) {
-            _decreaseLiquidity(safe, nftManager, tokenId, liquidity);
-        }
-        uint256 amount0;
-        uint256 amount1;
-        // Collect fees
+        uint256 amount0 = 0;
+        uint256 amount1 = 0;
 
         if (!isStaked) {
+            // collect actual fees since collect can give u LP tokens and others
             (amount0, amount1) = _collectOwed(safe, nftManager, tokenId);
             if (amount0 > 0) {
                 // Swap earned fees to USDT
@@ -396,6 +392,14 @@ contract CholoDromeModule is Ownable {
                 );
             }
         }
+
+        // Decrease liquidity if any
+        if (liquidity > 0) {
+            _decreaseLiquidity(safe, nftManager, tokenId, liquidity);
+        }
+
+        _collectOwed(safe, nftManager, tokenId);
+        // Collect fees
 
         _burnPosition(safe, nftManager, tokenId);
 
