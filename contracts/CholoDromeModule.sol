@@ -533,5 +533,105 @@ contract CholoDromeModule is Ownable {
         return IERC20(rewardStable).balanceOf(safe);
     }
 
-    // Functions will be added here
+    /// @notice Stakes a position in the gauge and collects any earned fees before staking
+    /// @param pool The pool address
+    /// @param tokenId The ID of the position
+    function stakeAndCollect(address pool, uint256 tokenId) external {
+        require(approvedPools[pool], "Pool not approved for this module");
+
+        ISafe safe = ISafe(payable(msg.sender));
+        address nftManager = ICLPool(pool).nft();
+        address gaugeAddress = ICLPool(pool).gauge();
+
+        INonfungiblePositionManager nftPositionManager = INonfungiblePositionManager(
+                nftManager
+            );
+        ICLGauge clGauge = ICLGauge(gaugeAddress);
+
+        // Check if already staked
+        bool isStaked = clGauge.stakedContains(address(safe), tokenId);
+        require(!isStaked, "Position already staked");
+
+        uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
+
+        // Get initial position details
+        (
+            ,
+            ,
+            address token0,
+            address token1,
+            ,
+            ,
+            ,
+            ,
+            ,
+            ,
+            uint128 tokensOwed0,
+            uint128 tokensOwed1
+        ) = nftPositionManager.positions(tokenId);
+
+        // Collect any pending fees before staking
+        (uint256 amount0, uint256 amount1) = _collectOwed(
+            safe,
+            nftManager,
+            tokenId
+        );
+
+        // Swap collected fees to USDT if any
+        if (amount0 > 0) {
+            require(_swapToStable(safe, token0, amount0), "Token0 swap failed");
+        }
+        if (amount1 > 0) {
+            require(_swapToStable(safe, token1, amount1), "Token1 swap failed");
+        }
+
+        // Check if NFT approval is needed
+        bool isApproved = INonfungiblePositionManager(nftManager)
+            .isApprovedForAll(address(safe), gaugeAddress);
+
+        if (!isApproved) {
+            bytes memory approvalData = abi.encodeWithSelector(
+                INonfungiblePositionManager.setApprovalForAll.selector,
+                gaugeAddress,
+                true
+            );
+            require(
+                safe.execTransactionFromModule(
+                    nftManager,
+                    0,
+                    approvalData,
+                    Enum.Operation.Call
+                ),
+                "NFT approval failed"
+            );
+        }
+
+        // Stake the position
+        bytes memory stakeData = abi.encodeWithSelector(
+            ICLGauge.deposit.selector,
+            tokenId
+        );
+        require(
+            safe.execTransactionFromModule(
+                gaugeAddress,
+                0,
+                stakeData,
+                Enum.Operation.Call
+            ),
+            "Stake failed"
+        );
+
+        uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
+        uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
+
+        emit EarningsCollected(
+            address(safe),
+            pool,
+            tokenId,
+            tokensOwed0,
+            tokensOwed1,
+            0, // No velo rewards yet since we just staked
+            totalUsdtAmount
+        );
+    }
 }

@@ -71,6 +71,20 @@ interface INonfungiblePositionManager {
         uint128 amount1Max;
     }
 
+    /// @notice Returns true if operator is approved to transfer all of owner's tokens
+    /// @param owner The address that owns the NFTs
+    /// @param operator The address that acts on behalf of the owner
+    /// @return True if operator is approved to transfer all of owner's tokens
+    function isApprovedForAll(
+        address owner,
+        address operator
+    ) external view returns (bool);
+
+    /// @notice Approve or remove operator as an operator for the caller
+    /// @param operator The address to approve/remove as an operator
+    /// @param approved True if the operator is approved, false to revoke approval
+    function setApprovalForAll(address operator, bool approved) external;
+
     function positions(
         uint256 tokenId
     )
