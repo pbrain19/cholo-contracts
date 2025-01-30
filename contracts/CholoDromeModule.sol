@@ -148,35 +148,30 @@ contract CholoDromeModule is Ownable {
     }
 
     /// @notice Handles unstaking from gauge if position is staked
-    function _handleUnstake(
-        ISafe safe,
-        address gauge,
-        uint256 tokenId
-    ) internal {
+    function handleUnstake(ISafe safe, address gauge, uint256 tokenId) public {
         require(gauge != address(0), "Invalid gauge");
 
         ICLGauge clGauge = ICLGauge(gauge);
         bool isStaked = clGauge.stakedContains(address(safe), tokenId);
+
+        require(isStaked, "Position not staked");
+
         uint256 amount = clGauge.earned(address(safe), tokenId);
 
-        // if not staked nothing to do here just return
-        if (!isStaked) return;
+        bytes memory withdrawData = abi.encodeWithSelector(
+            ICLGauge.withdraw.selector,
+            tokenId
+        );
 
-        if (isStaked) {
-            bytes memory withdrawData = abi.encodeWithSelector(
-                ICLGauge.withdraw.selector,
-                tokenId
-            );
-            require(
-                safe.execTransactionFromModule(
-                    gauge,
-                    0,
-                    withdrawData,
-                    Enum.Operation.Call
-                ),
-                "Gauge withdraw failed"
-            );
-        }
+        require(
+            safe.execTransactionFromModule(
+                gauge,
+                0,
+                withdrawData,
+                Enum.Operation.Call
+            ),
+            "Gauge withdraw failed"
+        );
 
         if (amount > 0) {
             require(
@@ -372,10 +367,15 @@ contract CholoDromeModule is Ownable {
 
         // Handle unstaking if needed
         address gaugeAddress = ICLPool(pool).gauge();
-        ICLGauge clGauge = ICLGauge(gaugeAddress);
-        veloAmount = clGauge.earned(address(safe), tokenId);
-        _handleUnstake(safe, gaugeAddress, tokenId);
 
+        ICLGauge clGauge = ICLGauge(gaugeAddress);
+
+        bool isStaked = clGauge.stakedContains(address(safe), tokenId);
+
+        if (isStaked) {
+            veloAmount = clGauge.earned(address(safe), tokenId);
+            handleUnstake(safe, gaugeAddress, tokenId);
+        }
         // Decrease liquidity if any
         uint256 lpAmount0;
         uint256 lpAmount1;
@@ -413,8 +413,6 @@ contract CholoDromeModule is Ownable {
 
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
         uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
-
-        bool isStaked = clGauge.stakedContains(address(safe), tokenId);
 
         // when token is staked the amount0 and amount1 are 0 because we dont get to collect those
         // when not staked we collect the fees (velos)
@@ -471,39 +469,6 @@ contract CholoDromeModule is Ownable {
         );
     }
 
-    // 0xebd5311bea1948e1441333976eadcfe5fbda777c
-    // 1191434
-    function collectStaked(address pool, uint256 tokenId) external {
-        require(approvedPools[pool], "Pool not approved for this module");
-
-        ISafe safe = ISafe(payable(msg.sender));
-
-        address gaugeAddress = ICLPool(pool).gauge();
-        ICLGauge clGauge = ICLGauge(gaugeAddress);
-
-        uint256 veloAmount = clGauge.earned(address(safe), tokenId);
-
-        bool isStaked = clGauge.stakedContains(address(safe), tokenId);
-
-        require(isStaked, "Position not staked");
-
-        if (veloAmount > 0) {
-            bytes memory getRewardData = abi.encodeWithSelector(
-                ICLGauge.getReward.selector,
-                tokenId
-            );
-            require(
-                safe.execTransactionFromModule(
-                    gaugeAddress,
-                    0,
-                    getRewardData,
-                    Enum.Operation.Call
-                ),
-                "Gauge get reward failed"
-            );
-        }
-    }
-
     /// @notice Collects fees from a position and converts them to USDT
     /// @param pool The pool address
     /// @param tokenId The ID of the position
@@ -541,10 +506,10 @@ contract CholoDromeModule is Ownable {
         uint256 amount1;
 
         bool isStaked = clGauge.stakedContains(address(safe), tokenId);
-        veloAmount = clGauge.earned(address(safe), tokenId);
 
         // Claim gauge rewards if staked
         if (isStaked) {
+            veloAmount = clGauge.earned(address(safe), tokenId);
             if (veloAmount > 0) {
                 bytes memory getRewardData = abi.encodeWithSelector(
                     ICLGauge.getReward.selector,
