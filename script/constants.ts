@@ -33,8 +33,43 @@ export const TOKEN_INFO = {
 } as const;
 
 export const PATHS_WE_NEED = [
-  { tokenIn: USDC, tokenOut: USDT },
-  { tokenIn: OP, tokenOut: USDT },
-  { tokenIn: VELO, tokenOut: USDT },
-  { tokenIn: WLD, tokenOut: USDT },
+  {
+    tokenIn: USDC,
+    tokenOut: USDT,
+  },
+  {
+    tokenIn: OP,
+    tokenOut: USDT,
+  },
+  {
+    tokenIn: VELO,
+    tokenOut: USDT,
+  },
+  {
+    tokenIn: WLD,
+    tokenOut: USDT,
+  },
+];
+
+export const PRICE_FEEDS = [
+  {
+    from: OP,
+    to: USDC,
+    priceFeed: "0x0D276FC14719f9292D5C1eA2198673d1f4269246",
+  },
+  {
+    from: VELO,
+    to: USDC,
+    priceFeed: "0x0f2Ed59657e391746C1a097BDa98F2aBb94b1120",
+  },
+  {
+    from: WLD,
+    to: USDC,
+    priceFeed: "0x4e1C6B168DCFD7758bC2Ab9d2865f1895813D236",
+  },
+  {
+    from: USDT,
+    to: USDC,
+    priceFeed: "0xECef79E109e997bCA29c1c0897ec9d7b03647F5E",
+  },
 ];

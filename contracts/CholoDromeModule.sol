@@ -1,19 +1,18 @@
 // SPDX-License-Identifier: LGPL-3.0
 pragma solidity ^0.8.0;
 // Imports will be added here
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@safe-global/safe-contracts/contracts/common/Enum.sol";
 import "./choloInterfaces.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/IQuoter.sol";
 import "./ISafe.sol";
 
 contract CholoDromeModule is Ownable {
     address public rewardToken; // Velo token address
     address public rewardStable; // USDT token address
     address public swapRouter; // Address of the Uniswap V3 Swap Router
-    address public quoter;
+    address public immutable USDC;
 
     uint256 private constant SLIPPAGE_DENOMINATOR = 10000;
     uint256 public slippageTolerance = 50; // 0.5% default slippage tolerance
@@ -23,6 +22,9 @@ contract CholoDromeModule is Ownable {
 
     // Mapping to store encoded paths for swaps between two tokens
     mapping(address => mapping(address => bytes)) public swapPaths;
+
+    // Mapping to store price feed addresses for token pairs
+    mapping(address => mapping(address => address)) public priceFeeds;
 
     event PoolApproved(address indexed safe, address indexed pool);
     event PoolRemoved(address indexed safe, address indexed pool);
@@ -44,23 +46,28 @@ contract CholoDromeModule is Ownable {
         address indexed newStable
     );
     event SlippageToleranceUpdated(uint256 oldTolerance, uint256 newTolerance);
+    event PriceFeedUpdated(
+        address indexed fromToken,
+        address indexed toToken,
+        address indexed priceFeed
+    );
 
     constructor(
         address _owner,
         address _rewardToken,
         address _rewardStable,
-        address _quoter,
-        address _swapRouter
+        address _swapRouter,
+        address _usdc
     ) Ownable(_owner) {
         require(_owner != address(0), "Invalid owner");
         require(_rewardToken != address(0), "Invalid reward token");
         require(_rewardStable != address(0), "Invalid reward stable");
-        require(_quoter != address(0), "Invalid quoter");
         require(_swapRouter != address(0), "Invalid swap router");
+        require(_usdc != address(0), "Invalid USDC address");
         rewardToken = _rewardToken;
         rewardStable = _rewardStable;
-        quoter = _quoter;
         swapRouter = _swapRouter;
+        USDC = _usdc;
     }
 
     /// @notice Set the slippage tolerance for swaps
@@ -136,6 +143,102 @@ contract CholoDromeModule is Ownable {
     ) internal view returns (bytes memory path) {
         path = swapPaths[fromToken][toToken];
         require(path.length > 0, "Swap path not set");
+    }
+
+    /// @notice Set the price feed for a token pair
+    /// @param fromToken The source token address
+    /// @param toToken The destination token address
+    /// @param priceFeed The Chainlink price feed address for the token pair
+    function setPriceFeed(
+        address fromToken,
+        address toToken,
+        address priceFeed
+    ) external onlyOwner {
+        require(fromToken != address(0), "Invalid from token");
+        require(toToken != address(0), "Invalid to token");
+        require(priceFeed != address(0), "Invalid price feed");
+        priceFeeds[fromToken][toToken] = priceFeed;
+        emit PriceFeedUpdated(fromToken, toToken, priceFeed);
+    }
+
+    /// @notice Get the latest price from a Chainlink feed with validation
+    /// @param priceFeed The address of the price feed
+    /// @return price The normalized price (8 decimals)
+    function _getValidatedPrice(
+        address priceFeed
+    ) internal view returns (uint256) {
+        require(priceFeed != address(0), "Price feed not set");
+
+        AggregatorV3Interface oracle = AggregatorV3Interface(priceFeed);
+
+        (, int256 price, , uint256 updatedAt, ) = oracle.latestRoundData();
+
+        require(price > 0, "Invalid price");
+        require(block.timestamp - updatedAt <= 24 hours, "Price feed too old");
+
+        return uint256(price);
+    }
+
+    /// @notice Check if a price feed exists for a token pair
+    /// @param fromToken The source token address
+    /// @param toToken The destination token address
+    /// @return priceFeed The price feed address, reverts if not found
+    function _getPriceFeed(
+        address fromToken,
+        address toToken
+    ) internal view returns (address priceFeed) {
+        priceFeed = priceFeeds[fromToken][toToken];
+        require(priceFeed != address(0), "No price feed for token pair");
+        return priceFeed;
+    }
+
+    /// @notice Calculate the minimum amount out with slippage tolerance using Chainlink oracle
+    /// @param token The input token address
+    /// @param amountIn The input amount
+    /// @return The minimum amount out in USDT considering slippage
+    function _calculateAmountOutMinimum(
+        address token,
+        uint256 amountIn
+    ) internal view returns (uint256) {
+        if (token == rewardStable) return amountIn;
+
+        // Get the USDC/USDT price feed which we'll need in both cases
+        address usdcUsdtFeed = _getPriceFeed(USDC, rewardStable);
+        uint256 usdcUsdtPrice = _getValidatedPrice(usdcUsdtFeed);
+        uint256 expectedAmount;
+
+        if (token == USDC) {
+            // Direct USDC to USDT conversion
+            // Both USDC and USDT have 6 decimals, price feed has 8 decimals
+            expectedAmount = (amountIn * usdcUsdtPrice) / 1e8;
+            return
+                (expectedAmount * (SLIPPAGE_DENOMINATOR - slippageTolerance)) /
+                SLIPPAGE_DENOMINATOR;
+        }
+
+        // For all other tokens, we need to go through USDC first
+        address tokenUsdcFeed = _getPriceFeed(token, USDC);
+        uint256 tokenUsdcPrice = _getValidatedPrice(tokenUsdcFeed);
+
+        // Get token decimals
+        uint8 tokenDecimals = IERC20Metadata(token).decimals();
+
+        // First convert to USDC equivalent
+        // Need to adjust for:
+        // 1. Price feed decimals (8)
+        // 2. Token decimals (tokenDecimals)
+        // 3. USDC decimals (6)
+        uint256 usdcAmount = (amountIn * tokenUsdcPrice) /
+            (10 ** (8 + tokenDecimals - 6));
+
+        // Then convert USDC amount to USDT
+        // Both USDC and USDT have 6 decimals, price feed has 8 decimals
+        expectedAmount = (usdcAmount * usdcUsdtPrice) / 1e8;
+
+        // Apply slippage tolerance
+        return
+            (expectedAmount * (SLIPPAGE_DENOMINATOR - slippageTolerance)) /
+            SLIPPAGE_DENOMINATOR;
     }
 
     function unstakeAndCollect(address pool, uint256 tokenId) external {
@@ -315,21 +418,6 @@ contract CholoDromeModule is Ownable {
                 swapData,
                 Enum.Operation.Call
             );
-    }
-
-    /// @notice Calculate the minimum amount out with slippage tolerance
-    function _calculateAmountOutMinimum(
-        address token,
-        uint256 amountIn
-    ) internal returns (uint256) {
-        // Use the quoter to get the expected output amount
-        bytes memory path = _getSwapPath(token, rewardStable);
-        uint256 amountOut = IQuoter(quoter).quoteExactInput(path, amountIn);
-
-        // Calculate minimum amount out with slippage tolerance
-        return
-            (amountOut * (SLIPPAGE_DENOMINATOR - slippageTolerance)) /
-            SLIPPAGE_DENOMINATOR;
     }
 
     /// @notice Main function to withdraw liquidity and collect fees

@@ -3,15 +3,14 @@ import { Currency, CurrencyAmount, Token, TradeType } from "@uniswap/sdk-core";
 import { encodeRouteToPath, Route } from "@uniswap/v3-sdk";
 import { Protocol } from "@uniswap/router-sdk";
 import { parseUnits } from "viem";
-import { TOKEN_INFO } from "./constants";
+import { TOKEN_INFO, PATHS_WE_NEED, PRICE_FEEDS } from "./constants";
 import { task } from "hardhat/config";
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import CholoDromeModule from "../artifacts/contracts/CholoDromeModule.sol/CholoDromeModule.json";
 import { ethers } from "ethers";
-import { PATHS_WE_NEED } from "./constants";
 
 // Contract address from deployment
-const DEPLOYED_ADDRESS = "0x645AbE606eE3EbFa5A150Ed578a426a273147C12";
+const DEPLOYED_ADDRESS = "0xC65843B14D3a190944Ecf0A1b3dec8D60370a1A7";
 
 async function getRoute(
   tokenIn: string,
@@ -104,6 +103,22 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       wallet
     );
 
+    // First set up all price feeds
+    console.log("\nSetting up price feeds...");
+    for (const { from, to, priceFeed } of PRICE_FEEDS) {
+      console.log(`Setting price feed for ${from} -> ${to}`);
+      try {
+        const tx = await choloDromeModule.setPriceFeed(from, to, priceFeed);
+        console.log("Transaction hash:", tx.hash);
+        await tx.wait();
+        console.log("Price feed set successfully!");
+      } catch (error) {
+        console.error("Error setting price feed:", error);
+      }
+    }
+
+    // Then set up all swap routes
+    console.log("\nSetting up swap routes...");
     for (const { tokenIn, tokenOut } of PATHS_WE_NEED) {
       console.log("Getting route for:");
       console.log(`Token In: ${tokenIn}`);
