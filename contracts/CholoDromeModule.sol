@@ -150,9 +150,9 @@ contract CholoDromeModule is Ownable {
 
         uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
 
-        _handleUnstakeAndCollect(safe, gaugeAddress, tokenId);
-
         uint256 veloAmount = clGauge.earned(address(safe), tokenId);
+
+        _handleUnstakeAndCollect(safe, gaugeAddress, tokenId);
 
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
         uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;

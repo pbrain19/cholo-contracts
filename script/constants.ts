@@ -36,5 +36,5 @@ export const PATHS_WE_NEED = [
   { tokenIn: USDC, tokenOut: USDT },
   { tokenIn: OP, tokenOut: USDT },
   { tokenIn: VELO, tokenOut: USDT },
-  // { tokenIn: WLD, tokenOut: USDT },
+  { tokenIn: WLD, tokenOut: USDT },
 ];
