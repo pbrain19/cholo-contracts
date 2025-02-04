@@ -3,14 +3,19 @@ import { Currency, CurrencyAmount, Token, TradeType } from "@uniswap/sdk-core";
 import { encodeRouteToPath, Route } from "@uniswap/v3-sdk";
 import { Protocol } from "@uniswap/router-sdk";
 import { parseUnits } from "viem";
-import { TOKEN_INFO, PATHS_WE_NEED, PRICE_FEEDS } from "./constants";
+import {
+  TOKEN_INFO,
+  PATHS_WE_NEED,
+  PRICE_FEEDS,
+  poolsToApprove,
+} from "./constants";
 import { task } from "hardhat/config";
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import CholoDromeModule from "../artifacts/contracts/CholoDromeModule.sol/CholoDromeModule.json";
 import { ethers } from "ethers";
 
 // Contract address from deployment
-const DEPLOYED_ADDRESS = "0xb59653BF980862Bf8384334D49ce66373704d4D7";
+const DEPLOYED_ADDRESS = "0xfD8B162f08c1c8D64E0Ed81AF65849C56C3500Ac";
 const OLD_ADDRESS = "0xC65843B14D3a190944Ecf0A1b3dec8D60370a1A7";
 async function getRoute(
   tokenIn: string,
@@ -109,22 +114,59 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       wallet
     );
 
-    // First set up all price feeds
-    // console.log("\nSetting up price feeds...");
-    // try {
-    //   const tx = await choloDromeModule.setPriceFeeds(
-    //     PRICE_FEEDS.map(({ from, to, priceFeed }) => ({
-    //       fromToken: from,
-    //       toToken: to,
-    //       priceFeed: priceFeed,
-    //     }))
-    //   );
-    //   console.log("Transaction hash:", tx.hash);
-    //   await tx.wait();
-    //   console.log("Price feeds set successfully!");
-    // } catch (error) {
-    //   console.error("Error setting price feeds:", error);
-    // }
+    // First approve all pools
+    console.log("\nApproving pools...");
+    try {
+      for (const pool of poolsToApprove) {
+        console.log(`Approving pool: ${pool}`);
+
+        const isApproved = await choloDromeModule.approvedPools(pool);
+        if (isApproved) {
+          console.log(`Pool ${pool} already approved`);
+          continue;
+        }
+
+        const tx = await choloDromeModule.approvePool(pool);
+        console.log("Transaction hash:", tx.hash);
+        await tx.wait();
+        console.log(`Pool ${pool} approved successfully!`);
+      }
+      console.log("All pools approved successfully!");
+    } catch (error) {
+      console.error("Error approving pools:", error);
+    }
+
+    // Then set up all price feeds
+    console.log("\nSetting up price feeds...");
+    try {
+      const priceFeedsToUpdate = await Promise.all(
+        PRICE_FEEDS.filter(async ({ from, to }) => {
+          const priceFeed = await choloDromeModule.priceFeeds(from, to);
+          if (priceFeed || priceFeed === "0x") {
+            console.log(`Price feed for ${from} -> ${to} already set`);
+            return false;
+          }
+          return true;
+        })
+      );
+
+      console.log("Price feeds to update:", priceFeedsToUpdate);
+
+      if (priceFeedsToUpdate.length) {
+        const tx = await choloDromeModule.setPriceFeeds(
+          priceFeedsToUpdate.map(({ from, to, priceFeed }) => ({
+            fromToken: from,
+            toToken: to,
+            priceFeed: priceFeed,
+          }))
+        );
+        console.log("Transaction hash:", tx.hash);
+        await tx.wait();
+        console.log("Price feeds set successfully!");
+      }
+    } catch (error) {
+      console.error("Error setting price feeds:", error);
+    }
 
     // Then set up all swap routes
     console.log("\nSetting up swap routes...");
@@ -134,9 +176,16 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
         PATHS_WE_NEED.map(async ({ tokenIn, tokenOut }) => {
           console.log(`Getting route for ${tokenIn} -> ${tokenOut}`);
           let path = await oldCholoDromeModule.swapPaths(tokenIn, tokenOut);
-          console.log("path", path);
-          if (!path) {
+          console.log(`got path for ${tokenIn} -> ${tokenOut} path:`, path);
+          if (!path || path === "0x") {
+            console.log(
+              `no path found for ${tokenIn} -> ${tokenOut}, getting new path`
+            );
             path = await getRoute(tokenIn, tokenOut, provider);
+            console.log(
+              `got new path for ${tokenIn} -> ${tokenOut} path:`,
+              path
+            );
           }
           return {
             fromToken: tokenIn,

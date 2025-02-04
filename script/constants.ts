@@ -32,6 +32,11 @@ export const TOKEN_INFO = {
   },
 } as const;
 
+export const poolsToApprove = [
+  "0xebd5311bea1948e1441333976eadcfe5fbda777c",
+  "0x4e5541815227e3272c405886149f45d2f437c7ff",
+];
+
 export const PATHS_WE_NEED = [
   {
     tokenIn: USDC,
