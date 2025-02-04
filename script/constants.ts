@@ -49,6 +49,14 @@ export const PATHS_WE_NEED = [
     tokenIn: WLD,
     tokenOut: USDT,
   },
+  {
+    tokenIn: OP,
+    tokenOut: USDC,
+  },
+  {
+    tokenIn: WLD,
+    tokenOut: USDC,
+  },
 ];
 
 export const PRICE_FEEDS = [

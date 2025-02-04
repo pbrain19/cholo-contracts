@@ -703,9 +703,14 @@ contract CholoDromeModule is Ownable {
             uint256 balanceToken0 = IERC20(token0).balanceOf(address(safe));
             uint256 balanceToken1 = IERC20(token1).balanceOf(address(safe));
 
-            // swap to usdc
-            _swap(safe, token0, balanceToken0, USDC);
-            _swap(safe, token1, balanceToken1, USDC);
+            // swap to usdc if needed
+            if (token0 != USDC) {
+                _swap(safe, token0, balanceToken0, USDC);
+            }
+
+            if (token1 != USDC) {
+                _swap(safe, token1, balanceToken1, USDC);
+            }
         }
 
         // when token is staked the amount0 and amount1 are 0 because we dont get to collect those
