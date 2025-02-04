@@ -15,7 +15,7 @@ contract CholoDromeModule is Ownable {
     address public immutable USDC;
 
     uint256 private constant SLIPPAGE_DENOMINATOR = 10000;
-    uint256 public slippageTolerance = 50; // 0.5% default slippage tolerance
+    uint256 public slippageTolerance = 100; // 0.5% default slippage tolerance
 
     // Mapping to store approved pools
     mapping(address => bool) public approvedPools;
@@ -25,6 +25,20 @@ contract CholoDromeModule is Ownable {
 
     // Mapping to store price feed addresses for token pairs
     mapping(address => mapping(address => address)) public priceFeeds;
+
+    // Add this struct near the top of the contract with other state variables
+    struct PriceFeedData {
+        address fromToken;
+        address toToken;
+        address priceFeed;
+    }
+
+    // Add this struct near the top with other state variables
+    struct SwapPathData {
+        address fromToken;
+        address toToken;
+        bytes path;
+    }
 
     event PoolApproved(address indexed safe, address indexed pool);
     event PoolRemoved(address indexed safe, address indexed pool);
@@ -117,20 +131,22 @@ contract CholoDromeModule is Ownable {
         emit RewardStableUpdated(oldStable, _newRewardStable);
     }
 
-    /// @notice Update the encoded path for swaps between two tokens
-    /// @dev Can only be called by the owner
-    /// @param fromToken The address of the token to swap from
-    /// @param toToken The address of the token to swap to
-    /// @param path The encoded path for the swap
-    function setSwapPath(
-        address fromToken,
-        address toToken,
-        bytes calldata path
-    ) external onlyOwner {
-        require(fromToken != address(0), "Invalid fromToken");
-        require(toToken != address(0), "Invalid toToken");
-        require(path.length > 0, "Invalid path");
-        swapPaths[fromToken][toToken] = path;
+    /// @notice Update multiple swap paths in a single transaction
+    /// @param paths Array of swap path data containing token pairs and their corresponding encoded paths
+    function setSwapPaths(SwapPathData[] calldata paths) external onlyOwner {
+        uint256 length = paths.length;
+        for (uint256 i = 0; i < length; ) {
+            SwapPathData calldata pathData = paths[i];
+            require(pathData.fromToken != address(0), "Invalid from token");
+            require(pathData.toToken != address(0), "Invalid to token");
+            require(pathData.path.length > 0, "Invalid path");
+
+            swapPaths[pathData.fromToken][pathData.toToken] = pathData.path;
+
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /// @notice Retrieve the swap path for a given token pair
@@ -145,95 +161,156 @@ contract CholoDromeModule is Ownable {
         require(path.length > 0, "Swap path not set");
     }
 
-    /// @notice Set the price feed for a token pair
-    /// @param fromToken The source token address
-    /// @param toToken The destination token address
-    /// @param priceFeed The Chainlink price feed address for the token pair
-    function setPriceFeed(
-        address fromToken,
-        address toToken,
-        address priceFeed
-    ) external onlyOwner {
-        require(fromToken != address(0), "Invalid from token");
-        require(toToken != address(0), "Invalid to token");
-        require(priceFeed != address(0), "Invalid price feed");
-        priceFeeds[fromToken][toToken] = priceFeed;
-        emit PriceFeedUpdated(fromToken, toToken, priceFeed);
+    /// @notice Set multiple price feeds in a single transaction
+    /// @param feeds Array of price feed data containing token pairs and their corresponding price feed addresses
+    function setPriceFeeds(PriceFeedData[] calldata feeds) external onlyOwner {
+        uint256 length = feeds.length;
+        for (uint256 i = 0; i < length; ) {
+            PriceFeedData calldata feed = feeds[i];
+            require(feed.fromToken != address(0), "Invalid from token");
+            require(feed.toToken != address(0), "Invalid to token");
+            require(feed.priceFeed != address(0), "Invalid price feed");
+
+            priceFeeds[feed.fromToken][feed.toToken] = feed.priceFeed;
+            emit PriceFeedUpdated(feed.fromToken, feed.toToken, feed.priceFeed);
+
+            unchecked {
+                ++i;
+            }
+        }
     }
 
-    /// @notice Get the latest price from a Chainlink feed with validation
-    /// @param priceFeed The address of the price feed
+    /// @notice Get the latest price between two tokens, checking both direct and inverse feeds
+    /// @param fromToken The source token address
+    /// @param toToken The destination token address
     /// @return price The normalized price (8 decimals)
+    /// @return inverse Whether the price feed was used in inverse
     function _getValidatedPrice(
-        address priceFeed
-    ) internal view returns (uint256) {
-        require(priceFeed != address(0), "Price feed not set");
-
-        AggregatorV3Interface oracle = AggregatorV3Interface(priceFeed);
-
-        (, int256 price, , uint256 updatedAt, ) = oracle.latestRoundData();
-
-        require(price > 0, "Invalid price");
-        require(block.timestamp - updatedAt <= 24 hours, "Price feed too old");
-
-        return uint256(price);
-    }
-
-    /// @notice Check if a price feed exists for a token pair
-    /// @param fromToken The source token address
-    /// @param toToken The destination token address
-    /// @return priceFeed The price feed address, reverts if not found
-    function _getPriceFeed(
         address fromToken,
         address toToken
-    ) internal view returns (address priceFeed) {
-        priceFeed = priceFeeds[fromToken][toToken];
-        require(priceFeed != address(0), "No price feed for token pair");
-        return priceFeed;
+    ) internal view returns (uint256 price, bool inverse) {
+        // First try direct price feed
+        address priceFeed = priceFeeds[fromToken][toToken];
+
+        if (priceFeed != address(0)) {
+            // Direct price feed exists
+            AggregatorV3Interface oracle = AggregatorV3Interface(priceFeed);
+            (, int256 rawPrice, , uint256 updatedAt, ) = oracle
+                .latestRoundData();
+            require(rawPrice > 0, "Invalid price");
+            require(
+                block.timestamp - updatedAt <= 24 hours,
+                "Price feed too old"
+            );
+            return (uint256(rawPrice), false);
+        }
+
+        // Try inverse price feed
+        priceFeed = priceFeeds[toToken][fromToken];
+        if (priceFeed != address(0)) {
+            // Inverse price feed exists
+            AggregatorV3Interface oracle = AggregatorV3Interface(priceFeed);
+            (, int256 rawPrice, , uint256 updatedAt, ) = oracle
+                .latestRoundData();
+            require(rawPrice > 0, "Invalid price");
+            require(
+                block.timestamp - updatedAt <= 24 hours,
+                "Price feed too old"
+            );
+            // Calculate inverse price: 1e16 / price to maintain 8 decimals
+            // We use 1e16 because price feeds are in 8 decimals, so 1e16/1e8 = 1e8 (our target decimals)
+            return (1e16 / uint256(rawPrice), true);
+        }
+
+        revert("No price feed found");
     }
 
     /// @notice Calculate the minimum amount out with slippage tolerance using Chainlink oracle
-    /// @param token The input token address
+    /// @param tokenIn The input token address
     /// @param amountIn The input amount
-    /// @return The minimum amount out in USDT considering slippage
+    /// @param tokenOut The output token address
+    /// @return The minimum amount out considering slippage
     function _calculateAmountOutMinimum(
-        address token,
-        uint256 amountIn
+        address tokenIn,
+        uint256 amountIn,
+        address tokenOut
     ) internal view returns (uint256) {
-        if (token == rewardStable) return amountIn;
-
-        // Get the USDC/USDT price feed which we'll need in both cases
-        address usdcUsdtFeed = _getPriceFeed(USDC, rewardStable);
-        uint256 usdcUsdtPrice = _getValidatedPrice(usdcUsdtFeed);
-        uint256 expectedAmount;
-
-        if (token == USDC) {
-            // Direct USDC to USDT conversion
-            // Both USDC and USDT have 6 decimals, price feed has 8 decimals
-            expectedAmount = (amountIn * usdcUsdtPrice) / 1e8;
-            return
-                (expectedAmount * (SLIPPAGE_DENOMINATOR - slippageTolerance)) /
-                SLIPPAGE_DENOMINATOR;
-        }
-
-        // For all other tokens, we need to go through USDC first
-        address tokenUsdcFeed = _getPriceFeed(token, USDC);
-        uint256 tokenUsdcPrice = _getValidatedPrice(tokenUsdcFeed);
+        if (tokenIn == tokenOut) return amountIn;
 
         // Get token decimals
-        uint8 tokenDecimals = IERC20Metadata(token).decimals();
+        uint8 tokenInDecimals = IERC20Metadata(tokenIn).decimals();
+        uint8 tokenOutDecimals = IERC20Metadata(tokenOut).decimals();
 
-        // First convert to USDC equivalent
-        // Need to adjust for:
-        // 1. Price feed decimals (8)
-        // 2. Token decimals (tokenDecimals)
-        // 3. USDC decimals (6)
-        uint256 usdcAmount = (amountIn * tokenUsdcPrice) /
-            (10 ** (8 + tokenDecimals - 6));
+        // Check for direct price feed
+        address directFeed = priceFeeds[tokenIn][tokenOut];
+        address inverseFeed = priceFeeds[tokenOut][tokenIn];
 
-        // Then convert USDC amount to USDT
-        // Both USDC and USDT have 6 decimals, price feed has 8 decimals
-        expectedAmount = (usdcAmount * usdcUsdtPrice) / 1e8;
+        uint256 expectedAmount;
+
+        if (directFeed != address(0)) {
+            // Direct price feed exists
+            (uint256 price, bool inverse) = _getValidatedPrice(
+                tokenIn,
+                tokenOut
+            );
+            require(!inverse, "Unexpected inverse price");
+            // Adjust for decimal differences: (amountIn * price * 10^outDecimals) / (10^8 * 10^inDecimals)
+            expectedAmount =
+                (amountIn * price * (10 ** tokenOutDecimals)) /
+                (10 ** (8 + tokenInDecimals));
+        } else if (inverseFeed != address(0)) {
+            // Inverse price feed exists
+            (uint256 price, bool inverse) = _getValidatedPrice(
+                tokenIn,
+                tokenOut
+            );
+            require(inverse, "Expected inverse price");
+            // For inverse prices: (amountIn * price * 10^outDecimals) / (10^8 * 10^inDecimals)
+            expectedAmount =
+                (amountIn * price * (10 ** tokenOutDecimals)) /
+                (10 ** (8 + tokenInDecimals));
+        } else if (tokenIn != USDC && tokenOut != USDC) {
+            // Try routing through USDC
+            // First get price from tokenIn to USDC
+            (uint256 priceToUsdc, bool inverseToUsdc) = _getValidatedPrice(
+                tokenIn,
+                USDC
+            );
+            // Then from USDC to tokenOut
+            (uint256 priceFromUsdc, bool inverseFromUsdc) = _getValidatedPrice(
+                USDC,
+                tokenOut
+            );
+
+            // Calculate USDC amount first
+            uint256 usdcAmount;
+            if (!inverseToUsdc) {
+                // Direct price to USDC
+                usdcAmount =
+                    (amountIn * priceToUsdc) /
+                    (10 ** (8 + tokenInDecimals - 6));
+            } else {
+                // Inverse price to USDC
+                usdcAmount =
+                    (amountIn * priceToUsdc) /
+                    (10 ** (8 + tokenInDecimals - 6));
+            }
+
+            // Then calculate final token amount
+            if (!inverseFromUsdc) {
+                // Direct price from USDC
+                expectedAmount =
+                    (usdcAmount * priceFromUsdc * (10 ** tokenOutDecimals)) /
+                    (10 ** (8 + 6));
+            } else {
+                // Inverse price from USDC
+                expectedAmount =
+                    (usdcAmount * priceFromUsdc * (10 ** tokenOutDecimals)) /
+                    (10 ** (8 + 6));
+            }
+        } else {
+            revert("No valid price path");
+        }
 
         // Apply slippage tolerance
         return
@@ -365,16 +442,47 @@ contract CholoDromeModule is Ownable {
         (amount0, amount1) = abi.decode(returnData, (uint256, uint256));
     }
 
+    function swap(
+        address token,
+        uint256 amountIn,
+        address toToken,
+        bool isEarning
+    ) public {
+        ISafe safe = ISafe(payable(msg.sender));
+
+        uint256 currentToTokenBalance = IERC20(toToken).balanceOf(
+            address(safe)
+        );
+
+        _swap(safe, token, amountIn, toToken);
+
+        uint256 newToTokenBalance = IERC20(toToken).balanceOf(address(safe));
+        uint256 amountOut = newToTokenBalance - currentToTokenBalance;
+        if (isEarning) {
+            emit EarningsCollected(
+                address(safe),
+                address(0),
+                0,
+                0,
+                0,
+                amountOut,
+                0
+            );
+        }
+    }
+
     /// @notice Swaps tokens to USDT using the stored path
-    function _swapToStable(
+    /// @param safe The safe address
+    /// @param token The token to swap
+    /// @param amountIn The amount of tokens to swap
+    /// @return success True if the swap was successful
+    function _swap(
         ISafe safe,
         address token,
-        uint256 amountIn
+        uint256 amountIn,
+        address toToken
     ) internal returns (bool) {
-        if (amountIn == 0) return true;
-        if (token == rewardStable) return true;
-
-        bytes memory path = _getSwapPath(token, rewardStable);
+        bytes memory path = _getSwapPath(token, toToken);
 
         // Approve the swap router to spend the input token
         bytes memory approveData = abi.encodeWithSelector(
@@ -393,14 +501,18 @@ contract CholoDromeModule is Ownable {
         );
 
         // Calculate minimum amount out with slippage tolerance
-        uint256 amountOutMinimum = _calculateAmountOutMinimum(token, amountIn);
+        uint256 amountOutMinimum = _calculateAmountOutMinimum(
+            token,
+            amountIn,
+            toToken
+        );
 
         // Create the swap parameters
         ISwapRouter.ExactInputParams memory params = ISwapRouter
             .ExactInputParams({
                 path: path,
                 recipient: address(safe),
-                deadline: block.timestamp + 300, // 5-minute deadline
+                deadline: block.timestamp + 300,
                 amountIn: amountIn,
                 amountOutMinimum: amountOutMinimum
             });
@@ -420,8 +532,31 @@ contract CholoDromeModule is Ownable {
             );
     }
 
+    /// @notice Swaps tokens to USDT using the stored path
+    /// @param safe The safe address
+    /// @param token The token to swap
+    /// @param amountIn The amount of tokens to swap
+    /// @return success True if the swap was successful
+    function _swapToStable(
+        ISafe safe,
+        address token,
+        uint256 amountIn
+    ) internal returns (bool) {
+        if (amountIn == 0) return true;
+        if (token == rewardStable) return true;
+
+        return _swap(safe, token, amountIn, rewardStable);
+    }
+
     /// @notice Main function to withdraw liquidity and collect fees
-    function withdrawAndCollect(address pool, uint256 tokenId) external {
+    /// @param pool The pool address
+    /// @param tokenId The ID of the position
+    /// @param convertToUsdc Whether to convert the collected fees to USDC to protect against major loss in a super down volatile market
+    function withdrawAndCollect(
+        address pool,
+        uint256 tokenId,
+        bool convertToUsdc
+    ) external {
         require(approvedPools[pool], "Pool not approved for this module");
 
         ISafe safe = ISafe(payable(msg.sender));
@@ -493,6 +628,15 @@ contract CholoDromeModule is Ownable {
 
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
         uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
+
+        if (convertToUsdc) {
+            uint256 balanceToken0 = IERC20(token0).balanceOf(address(safe));
+            uint256 balanceToken1 = IERC20(token1).balanceOf(address(safe));
+
+            // swap to usdc
+            _swap(safe, token0, balanceToken0, USDC);
+            _swap(safe, token1, balanceToken1, USDC);
+        }
 
         // when token is staked the amount0 and amount1 are 0 because we dont get to collect those
         // when not staked we collect the fees (velos)

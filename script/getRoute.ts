@@ -105,58 +105,44 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
 
     // First set up all price feeds
     console.log("\nSetting up price feeds...");
-    for (const { from, to, priceFeed } of PRICE_FEEDS) {
-      console.log(`Setting price feed for ${from} -> ${to}`);
-      try {
-        const tx = await choloDromeModule.setPriceFeed(from, to, priceFeed);
-        console.log("Transaction hash:", tx.hash);
-        await tx.wait();
-        console.log("Price feed set successfully!");
-      } catch (error) {
-        console.error("Error setting price feed:", error);
-      }
+    try {
+      const tx = await choloDromeModule.setPriceFeeds(
+        PRICE_FEEDS.map(({ from, to, priceFeed }) => ({
+          fromToken: from,
+          toToken: to,
+          priceFeed: priceFeed,
+        }))
+      );
+      console.log("Transaction hash:", tx.hash);
+      await tx.wait();
+      console.log("Price feeds set successfully!");
+    } catch (error) {
+      console.error("Error setting price feeds:", error);
     }
 
     // Then set up all swap routes
     console.log("\nSetting up swap routes...");
-    for (const { tokenIn, tokenOut } of PATHS_WE_NEED) {
-      console.log("Getting route for:");
-      console.log(`Token In: ${tokenIn}`);
-      console.log(`Token Out: ${tokenOut}`);
+    try {
+      // First get all paths
+      const swapPaths = await Promise.all(
+        PATHS_WE_NEED.map(async ({ tokenIn, tokenOut }) => {
+          console.log(`Getting route for ${tokenIn} -> ${tokenOut}`);
+          const path = await getRoute(tokenIn, tokenOut, provider);
+          return {
+            fromToken: tokenIn,
+            toToken: tokenOut,
+            path,
+          };
+        })
+      );
 
-      try {
-        const newPath = await getRoute(tokenIn, tokenOut, provider);
-
-        // Get the existing path from the contract
-        const existingPath = await choloDromeModule.swapPaths(
-          tokenIn,
-          tokenOut
-        );
-
-        // Convert both paths to hex strings for comparison
-        const newPathHex = ethers.utils.hexlify(newPath);
-        const existingPathHex = ethers.utils.hexlify(existingPath);
-
-        // Compare paths
-        if (newPathHex === existingPathHex) {
-          console.log("Path unchanged, skipping update...");
-          continue;
-        }
-
-        console.log("\nSetting new path in contract...", newPath);
-        const tx = await choloDromeModule.setSwapPath(
-          tokenIn,
-          tokenOut,
-          newPath
-        );
-        console.log("Transaction hash:", tx.hash);
-
-        console.log("Waiting for confirmation...");
-        await tx.wait();
-        console.log("Path successfully set in contract!");
-      } catch (error) {
-        console.error("Error:", error);
-      }
+      // Then set them all in one transaction
+      const tx = await choloDromeModule.setSwapPaths(swapPaths);
+      console.log("Transaction hash:", tx.hash);
+      await tx.wait();
+      console.log("Swap paths set successfully!");
+    } catch (error) {
+      console.error("Error setting swap paths:", error);
     }
   }
 );
