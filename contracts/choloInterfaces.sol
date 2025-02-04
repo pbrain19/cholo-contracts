@@ -153,3 +153,10 @@ interface INonfungiblePositionManager {
     /// @param tokenId The ID of the token that is being burned
     function burn(uint256 tokenId) external payable;
 }
+
+// Added IWETH interface for wrapping/unwrapping native ETH
+interface IWETH {
+    function deposit() external payable;
+
+    function withdraw(uint256 wad) external;
+}

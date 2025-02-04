@@ -13,6 +13,7 @@ contract CholoDromeModule is Ownable {
     address public rewardStable; // USDT token address
     address public swapRouter; // Address of the Uniswap V3 Swap Router
     address public immutable USDC;
+    address public immutable WETH; // Added state variable for WETH
 
     uint256 private constant SLIPPAGE_DENOMINATOR = 10000;
     uint256 public slippageTolerance = 100; // 0.5% default slippage tolerance
@@ -71,17 +72,20 @@ contract CholoDromeModule is Ownable {
         address _rewardToken,
         address _rewardStable,
         address _swapRouter,
-        address _usdc
+        address _usdc,
+        address _weth
     ) Ownable(_owner) {
         require(_owner != address(0), "Invalid owner");
         require(_rewardToken != address(0), "Invalid reward token");
         require(_rewardStable != address(0), "Invalid reward stable");
         require(_swapRouter != address(0), "Invalid swap router");
         require(_usdc != address(0), "Invalid USDC address");
+        require(_weth != address(0), "Invalid WETH address");
         rewardToken = _rewardToken;
         rewardStable = _rewardStable;
         swapRouter = _swapRouter;
         USDC = _usdc;
+        WETH = _weth;
     }
 
     /// @notice Set the slippage tolerance for swaps
@@ -442,22 +446,27 @@ contract CholoDromeModule is Ownable {
         (amount0, amount1) = abi.decode(returnData, (uint256, uint256));
     }
 
+    /// @notice Swaps tokens. If token is native ETH (represented by address(0)), it will be wrapped to WETH.
+    /// If toToken is native ETH (address(0)), then received WETH is unwrapped.
     function swap(
         address token,
         uint256 amountIn,
         address toToken,
         bool isEarning
-    ) public {
+    ) public payable {
         ISafe safe = ISafe(payable(msg.sender));
-
-        uint256 currentToTokenBalance = IERC20(toToken).balanceOf(
-            address(safe)
-        );
-
-        _swap(safe, token, amountIn, toToken);
-
-        uint256 newToTokenBalance = IERC20(toToken).balanceOf(address(safe));
-        uint256 amountOut = newToTokenBalance - currentToTokenBalance;
+        uint256 amountOut;
+        if (toToken == address(0)) {
+            uint256 balanceBefore = address(safe).balance;
+            _swap(safe, token, amountIn, toToken);
+            uint256 balanceAfter = address(safe).balance;
+            amountOut = balanceAfter - balanceBefore;
+        } else {
+            uint256 balanceBefore = IERC20(toToken).balanceOf(address(safe));
+            _swap(safe, token, amountIn, toToken);
+            uint256 balanceAfter = IERC20(toToken).balanceOf(address(safe));
+            amountOut = balanceAfter - balanceBefore;
+        }
         if (isEarning) {
             emit EarningsCollected(
                 address(safe),
@@ -471,17 +480,48 @@ contract CholoDromeModule is Ownable {
         }
     }
 
-    /// @notice Swaps tokens to USDT using the stored path
-    /// @param safe The safe address
-    /// @param token The token to swap
-    /// @param amountIn The amount of tokens to swap
-    /// @return success True if the swap was successful
+    /// @notice Internal swap function with native ETH support for wrapping/unwrapping.
     function _swap(
         ISafe safe,
         address token,
         uint256 amountIn,
         address toToken
     ) internal returns (bool) {
+        // If token is native ETH (represented as address(0)), wrap it to WETH
+        if (token == address(0)) {
+            require(
+                msg.value == amountIn,
+                "Msg.value must equal amountIn for native ETH"
+            );
+            bytes memory depositData = abi.encodeWithSelector(
+                IWETH.deposit.selector
+            );
+            require(
+                safe.execTransactionFromModule(
+                    WETH,
+                    amountIn,
+                    depositData,
+                    Enum.Operation.Call
+                ),
+                "ETH wrapping failed"
+            );
+            token = WETH;
+        } else {
+            require(
+                msg.value == 0,
+                "No ETH should be sent when token is not native ETH"
+            );
+        }
+
+        // If toToken is native ETH, set it to WETH and mark for unwrapping after swap
+        bool shouldUnwrap = false;
+        if (toToken == address(0)) {
+            toToken = WETH;
+            shouldUnwrap = true;
+        }
+
+        require(token != toToken, "Cannot swap to same token");
+
         bytes memory path = _getSwapPath(token, toToken);
 
         // Approve the swap router to spend the input token
@@ -500,14 +540,12 @@ contract CholoDromeModule is Ownable {
             "Token approve failed"
         );
 
-        // Calculate minimum amount out with slippage tolerance
         uint256 amountOutMinimum = _calculateAmountOutMinimum(
             token,
             amountIn,
             toToken
         );
 
-        // Create the swap parameters
         ISwapRouter.ExactInputParams memory params = ISwapRouter
             .ExactInputParams({
                 path: path,
@@ -517,19 +555,38 @@ contract CholoDromeModule is Ownable {
                 amountOutMinimum: amountOutMinimum
             });
 
-        // Execute the swap
         bytes memory swapData = abi.encodeWithSelector(
             ISwapRouter.exactInput.selector,
             params
         );
-
-        return
+        require(
             safe.execTransactionFromModule(
                 swapRouter,
                 0,
                 swapData,
                 Enum.Operation.Call
+            ),
+            "Swap execution failed"
+        );
+
+        if (shouldUnwrap) {
+            uint256 wethBalance = IERC20(WETH).balanceOf(address(safe));
+            bytes memory withdrawData = abi.encodeWithSelector(
+                IWETH.withdraw.selector,
+                wethBalance
             );
+            require(
+                safe.execTransactionFromModule(
+                    WETH,
+                    0,
+                    withdrawData,
+                    Enum.Operation.Call
+                ),
+                "WETH unwrapping failed"
+            );
+        }
+
+        return true;
     }
 
     /// @notice Swaps tokens to USDT using the stored path
