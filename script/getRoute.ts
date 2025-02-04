@@ -10,8 +10,8 @@ import CholoDromeModule from "../artifacts/contracts/CholoDromeModule.sol/CholoD
 import { ethers } from "ethers";
 
 // Contract address from deployment
-const DEPLOYED_ADDRESS = "0xC65843B14D3a190944Ecf0A1b3dec8D60370a1A7";
-
+const DEPLOYED_ADDRESS = "0xb59653BF980862Bf8384334D49ce66373704d4D7";
+const OLD_ADDRESS = "0xC65843B14D3a190944Ecf0A1b3dec8D60370a1A7";
 async function getRoute(
   tokenIn: string,
   tokenOut: string,
@@ -103,22 +103,28 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       wallet
     );
 
+    const oldCholoDromeModule = new ethers.Contract(
+      OLD_ADDRESS,
+      CholoDromeModule.abi,
+      wallet
+    );
+
     // First set up all price feeds
-    console.log("\nSetting up price feeds...");
-    try {
-      const tx = await choloDromeModule.setPriceFeeds(
-        PRICE_FEEDS.map(({ from, to, priceFeed }) => ({
-          fromToken: from,
-          toToken: to,
-          priceFeed: priceFeed,
-        }))
-      );
-      console.log("Transaction hash:", tx.hash);
-      await tx.wait();
-      console.log("Price feeds set successfully!");
-    } catch (error) {
-      console.error("Error setting price feeds:", error);
-    }
+    // console.log("\nSetting up price feeds...");
+    // try {
+    //   const tx = await choloDromeModule.setPriceFeeds(
+    //     PRICE_FEEDS.map(({ from, to, priceFeed }) => ({
+    //       fromToken: from,
+    //       toToken: to,
+    //       priceFeed: priceFeed,
+    //     }))
+    //   );
+    //   console.log("Transaction hash:", tx.hash);
+    //   await tx.wait();
+    //   console.log("Price feeds set successfully!");
+    // } catch (error) {
+    //   console.error("Error setting price feeds:", error);
+    // }
 
     // Then set up all swap routes
     console.log("\nSetting up swap routes...");
@@ -127,7 +133,11 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       const swapPaths = await Promise.all(
         PATHS_WE_NEED.map(async ({ tokenIn, tokenOut }) => {
           console.log(`Getting route for ${tokenIn} -> ${tokenOut}`);
-          const path = await getRoute(tokenIn, tokenOut, provider);
+          let path = await oldCholoDromeModule.swapPaths(tokenIn, tokenOut);
+          console.log("path", path);
+          if (!path) {
+            path = await getRoute(tokenIn, tokenOut, provider);
+          }
           return {
             fromToken: tokenIn,
             toToken: tokenOut,
