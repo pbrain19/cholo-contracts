@@ -9,6 +9,7 @@ const CholoDromeModule = buildModule("CholoDromeModule", (m) => {
   const veloAddress = "0x9560e827af36c94d2ac33a39bce1fe78631088db";
   const usdtAddress = "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58";
   const usdcAddress = "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85";
+  const weth = "0x4200000000000000000000000000000000000006";
   const deployerAddress = m.getAccount(0);
 
   // Deploy CholoDromeModule with constructor parameters
@@ -18,6 +19,7 @@ const CholoDromeModule = buildModule("CholoDromeModule", (m) => {
     usdtAddress, // _rewardStable
     uniswapSwapRouterAddress, // _swapRouter
     usdcAddress, // _usdc
+    weth, // _weth
   ]);
 
   return { choloDromeModule };
