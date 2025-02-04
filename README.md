@@ -1,13 +1,5 @@
-# Sample Hardhat Project
+# Manager your liquidity like a cholo
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, and a Hardhat Ignition module that deploys that contract.
+a collection of smart contracts designed to make it easier to manage your lp on velodrome
 
-Try running some of the following tasks:
-
-```shell
-npx hardhat help
-npx hardhat test
-REPORT_GAS=true npx hardhat test
-npx hardhat node
-npx hardhat ignition deploy ./ignition/modules/Lock.ts
-```
+Made by cholos for cholos.
