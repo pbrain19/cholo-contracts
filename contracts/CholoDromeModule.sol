@@ -7,6 +7,7 @@ import "@safe-global/safe-contracts/contracts/common/Enum.sol";
 import "./choloInterfaces.sol";
 import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "./ISafe.sol";
+import "@uniswap/v3-core/contracts/libraries/TickMath.sol";
 
 contract CholoDromeModule is Ownable {
     address public rewardToken; // Velo token address
@@ -41,6 +42,12 @@ contract CholoDromeModule is Ownable {
         bytes path;
     }
 
+    // NEW: DepositInput struct for deposit amounts
+    struct DepositInput {
+        address token;
+        uint256 amount;
+    }
+
     event PoolApproved(address indexed safe, address indexed pool);
     event PoolRemoved(address indexed safe, address indexed pool);
     event EarningsCollected(
@@ -65,6 +72,13 @@ contract CholoDromeModule is Ownable {
         address indexed fromToken,
         address indexed toToken,
         address indexed priceFeed
+    );
+
+    // NEW: Event to signal completion of depositMax
+    event DepositMaxCompleted(
+        address indexed safe,
+        address indexed pool,
+        uint256 tokenId
     );
 
     constructor(
@@ -927,5 +941,145 @@ contract CholoDromeModule is Ownable {
             0, // No velo rewards yet since we just staked
             totalUsdtAmount
         );
+    }
+
+    // NEW: depositMax function to deposit maximum liquidity into a pool
+    // Now accepts the number of ticks below and above (instead of raw tick spans) and calculates tick boundaries using the pool's tickSpacing.
+    // It then computes ideal USDC splits based on the distances from sqrtPriceX96 to upper and lower boundaries, and swaps from USDC as needed.
+    function depositMax(
+        DepositInput[] calldata deposits,
+        address pool,
+        int256 ticksBelow,
+        int256 ticksAbove
+    ) external payable {
+        // Obtain the safe from msg.sender
+        ISafe safe = ISafe(payable(msg.sender));
+
+        // Convert all deposit amounts to USDC.
+        uint256 initialUSDCBalance = IERC20(USDC).balanceOf(address(safe));
+        for (uint256 i = 0; i < deposits.length; i++) {
+            DepositInput memory dep = deposits[i];
+            if (dep.token == USDC) {
+                // Assume tokens already reside in the safe
+            } else {
+                // Swap the deposit token to USDC. For native ETH, _swap handles wrapping.
+                _swap(safe, dep.token, dep.amount, USDC);
+            }
+        }
+        uint256 totalUSDC = IERC20(USDC).balanceOf(address(safe)) -
+            initialUSDCBalance;
+        require(totalUSDC > 0, "No USDC available after swaps");
+
+        // Retrieve pool token addresses
+        ICLPool poolContract = ICLPool(pool);
+        address token0 = poolContract.token0();
+        address token1 = poolContract.token1();
+
+        // Get current pool parameters using slot0
+        (uint160 sqrtPriceX96, int24 currentTick, , , , ) = poolContract
+            .slot0();
+        int24 tickSpacing = poolContract.tickSpacing();
+        require(
+            ticksAbove > 0 && ticksBelow > 0,
+            "ticksAbove and ticksBelow must be > 0"
+        );
+
+        // Compute tick boundaries using the pool's tickSpacing
+        int24 tickLower = int24((currentTick) - ((ticksBelow) * (tickSpacing)));
+        int24 tickUpper = int24((currentTick) + ((ticksAbove) * (tickSpacing)));
+
+        // Use TickMath to get sqrt price boundaries
+        uint160 sqrtPriceLower = TickMath.getSqrtRatioAtTick(tickLower);
+        uint160 sqrtPriceUpper = TickMath.getSqrtRatioAtTick(tickUpper);
+
+        // Compute ideal USDC allocation for token0 and token1 based on the relative distances in sqrt space
+        // idealAmount0 = totalUSDC * (sqrtPriceUpper - sqrtPriceX96) / (sqrtPriceUpper - sqrtPriceLower)
+        uint256 numerator = uint256(sqrtPriceUpper) - uint256(sqrtPriceX96);
+        uint256 denominator = uint256(sqrtPriceUpper) - uint256(sqrtPriceLower);
+        uint256 idealAmount0 = (totalUSDC * numerator) / denominator;
+        uint256 idealAmount1 = totalUSDC - idealAmount0;
+
+        // Swap from USDC to pool tokens as needed
+        if (token0 != USDC) {
+            _swap(safe, USDC, idealAmount0, token0);
+        }
+        if (token1 != USDC) {
+            _swap(safe, USDC, idealAmount1, token1);
+        }
+
+        // Query updated balances for token0 and token1 held by the safe
+        uint256 balanceToken0 = IERC20(token0).balanceOf(address(safe));
+        uint256 balanceToken1 = IERC20(token1).balanceOf(address(safe));
+        require(
+            balanceToken0 > 0 && balanceToken1 > 0,
+            "Insufficient token balances after swaps"
+        );
+
+        // Approximated liquidity calculations using Uniswap V3 formulas (simplified):
+        // liquidity0 = balanceToken0 * (sqrtPriceX96 * sqrtPriceUpper) / (sqrtPriceUpper - sqrtPriceX96)
+        // liquidity1 = balanceToken1 / (sqrtPriceX96 - sqrtPriceLower)
+        uint256 liquidity0 = (balanceToken0 *
+            uint256(sqrtPriceX96) *
+            uint256(sqrtPriceUpper)) /
+            (uint256(sqrtPriceUpper) - uint256(sqrtPriceX96));
+        uint256 liquidity1 = balanceToken1 /
+            (uint256(sqrtPriceX96) - uint256(sqrtPriceLower));
+        uint256 liquidity = liquidity0 < liquidity1 ? liquidity0 : liquidity1;
+        require(liquidity > 0, "Liquidity calculation failed");
+
+        // Calculate the actual token amounts that would be used for the given liquidity (simplified approximations):
+        uint256 usedAmount0 = (liquidity *
+            (uint256(sqrtPriceUpper) - uint256(sqrtPriceX96))) /
+            (uint256(sqrtPriceX96) * uint256(sqrtPriceUpper));
+        uint256 usedAmount1 = liquidity *
+            (uint256(sqrtPriceX96) - uint256(sqrtPriceLower));
+
+        // Ensure that at least 98% of each token balance is utilized
+        require(
+            usedAmount0 >= (balanceToken0 * 98) / 100,
+            "Token0 used less than 98%"
+        );
+        require(
+            usedAmount1 >= (balanceToken1 * 98) / 100,
+            "Token1 used less than 98%"
+        );
+
+        // Prepare parameters for minting a new position via the NFT manager
+        address nftManager = poolContract.nft();
+        INonfungiblePositionManager.MintParams
+            memory params = INonfungiblePositionManager.MintParams({
+                token0: token0,
+                token1: token1,
+                tickSpacing: tickSpacing,
+                tickLower: tickLower,
+                tickUpper: tickUpper,
+                amount0Desired: balanceToken0,
+                amount1Desired: balanceToken1,
+                amount0Min: (balanceToken0 * 98) / 100,
+                amount1Min: (balanceToken1 * 98) / 100,
+                recipient: address(safe),
+                deadline: block.timestamp + 300,
+                sqrtPriceX96: sqrtPriceX96
+            });
+
+        // Mint the liquidity position via the safe
+        bytes memory mintData = abi.encodeWithSelector(
+            INonfungiblePositionManager.mint.selector,
+            params
+        );
+        (bool success, bytes memory returnData) = safe
+            .execTransactionFromModuleReturnData(
+                nftManager,
+                0,
+                mintData,
+                Enum.Operation.Call
+            );
+        require(success, "Mint failed");
+
+        (uint256 tokenId, , , ) = abi.decode(
+            returnData,
+            (uint256, uint128, uint256, uint256)
+        );
+        emit DepositMaxCompleted(address(safe), pool, tokenId);
     }
 }
