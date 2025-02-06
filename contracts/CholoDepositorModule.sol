@@ -44,11 +44,6 @@ contract CholoDepositorModule is Ownable {
         uint256 amountIn,
         address toToken
     ) internal {
-        // Add decimal normalization
-        uint8 decimalsIn = IERC20Metadata(token).decimals();
-        uint8 decimalsOut = IERC20Metadata(toToken).decimals();
-        amountIn = (amountIn * 10 ** decimalsOut) / 10 ** decimalsIn;
-
         bytes memory swapData = abi.encodeWithSelector(
             ICholoDromeModule.swap.selector,
             token,
@@ -77,7 +72,7 @@ contract CholoDepositorModule is Ownable {
     )
         internal
         view
-        returns (uint128 liquidity, uint256 usedAmount0, uint256 usedAmount1)
+        returns (uint128 liquidity, uint256 amount0ToUse, uint256 amount1ToUse)
     {
         liquidity = uint128(
             ISlipstreamSugar(slipstreamSugar).getLiquidityForAmounts(
@@ -89,13 +84,48 @@ contract CholoDepositorModule is Ownable {
             )
         );
 
-        (usedAmount0, usedAmount1) = ISlipstreamSugar(slipstreamSugar)
+        (amount0ToUse, amount1ToUse) = ISlipstreamSugar(slipstreamSugar)
             .getAmountsForLiquidity(
                 sqrtPriceX96,
                 sqrtPriceLower,
                 sqrtPriceUpper,
                 uint128(liquidity)
             );
+    }
+
+    // Reintroduced helper: Computes the ideal split of USDC across both tokens.
+    function _calculateIdealAmounts(
+        uint256 totalUSDC,
+        address pool,
+        uint160 sqrtPriceX96,
+        int24 tickLower,
+        int24 tickUpper
+    ) internal view returns (uint256 idealAmount0, uint256 idealAmount1) {
+        idealAmount0 = ISlipstreamSugar(slipstreamSugar).estimateAmount0(
+            totalUSDC,
+            pool,
+            sqrtPriceX96,
+            tickLower,
+            tickUpper
+        );
+
+        idealAmount1 = ISlipstreamSugar(slipstreamSugar).estimateAmount1(
+            totalUSDC,
+            pool,
+            sqrtPriceX96,
+            tickLower,
+            tickUpper
+        );
+
+        // If the ideal amounts exceed the total deposit, adjust accordingly.
+        if (idealAmount0 + idealAmount1 > totalUSDC) {
+            uint256 adjustment = (idealAmount0 + idealAmount1) - totalUSDC;
+            if (idealAmount0 > adjustment) {
+                idealAmount0 -= adjustment;
+            } else {
+                idealAmount1 -= adjustment;
+            }
+        }
     }
 
     function depositMax(
@@ -178,8 +208,47 @@ contract CholoDepositorModule is Ownable {
             ISlipstreamSugar(slipstreamSugar).getSqrtRatioAtTick(tickUpper)
         );
 
-        // Calculate liquidity using only deposited amounts
-        (, uint256 usedAmount0, uint256 usedAmount1) = _calculateLiquidity(
+        // --- NEW SWAP LOGIC ---
+        // Compute the ideal allocation of USDC between the two tokens.
+        (uint256 idealAmount0, uint256 idealAmount1) = _calculateIdealAmounts(
+            totalUSDCAllowed,
+            pool,
+            sqrtPriceX96,
+            tickLower,
+            tickUpper
+        );
+
+        if (isUSDCtoken0) {
+            // token0 is USDC; ideally, we want 'idealAmount0' to remain in token0
+            // and the excess USDC (balanceToken0 - idealAmount0) swapped into token1.
+            if (balanceToken0 > idealAmount0 && balanceToken1 < idealAmount1) {
+                uint256 swapUSDC = balanceToken0 - idealAmount0;
+                _swap(safe, USDC, swapUSDC, token1);
+                // Update the balances after the swap.
+                balanceToken0 =
+                    IERC20(token0).balanceOf(address(safe)) -
+                    initialToken0Balance;
+                balanceToken1 =
+                    IERC20(token1).balanceOf(address(safe)) -
+                    initialToken1Balance;
+            }
+        } else if (isUSDCtoken1) {
+            // token1 is USDC; we want to keep 'idealAmount1' intact and swap excess into token0.
+            if (balanceToken1 > idealAmount1 && balanceToken0 < idealAmount0) {
+                uint256 swapUSDC = balanceToken1 - idealAmount1;
+                _swap(safe, USDC, swapUSDC, token0);
+                balanceToken1 =
+                    IERC20(token1).balanceOf(address(safe)) -
+                    initialToken1Balance;
+                balanceToken0 =
+                    IERC20(token0).balanceOf(address(safe)) -
+                    initialToken0Balance;
+            }
+        }
+        // --- END NEW SWAP LOGIC ---
+
+        // Now calculate liquidity using the updated token balances.
+        (, uint256 amount0ToUse, uint256 amount1ToUse) = _calculateLiquidity(
             sqrtPriceX96,
             sqrtPriceLower,
             sqrtPriceUpper,
@@ -189,12 +258,12 @@ contract CholoDepositorModule is Ownable {
 
         // Ensure that at least 98% of each token balance is utilized
         require(
-            usedAmount0 >=
+            amount0ToUse >=
                 (isUSDCtoken0 ? totalUSDCAllowed : balanceToken0 * 98) / 100,
             "Token0 used less than 98%"
         );
         require(
-            usedAmount1 >=
+            amount1ToUse >=
                 (isUSDCtoken1 ? totalUSDCAllowed : balanceToken1 * 98) / 100,
             "Token1 used less than 98%"
         );
@@ -208,8 +277,8 @@ contract CholoDepositorModule is Ownable {
                 tickSpacing: tickSpacing,
                 tickLower: tickLower,
                 tickUpper: tickUpper,
-                amount0Desired: isUSDCtoken0 ? totalUSDCAllowed : balanceToken0,
-                amount1Desired: isUSDCtoken1 ? totalUSDCAllowed : balanceToken1,
+                amount0Desired: amount0ToUse,
+                amount1Desired: amount1ToUse,
                 amount0Min: (
                     isUSDCtoken0 ? totalUSDCAllowed : balanceToken0 * 98
                 ) / 100,
