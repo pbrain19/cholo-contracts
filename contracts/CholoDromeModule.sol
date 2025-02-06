@@ -41,12 +41,6 @@ contract CholoDromeModule is Ownable {
         bytes path;
     }
 
-    // NEW: DepositInput struct for deposit amounts
-    struct DepositInput {
-        address token;
-        uint256 amount;
-    }
-
     event PoolApproved(address indexed safe, address indexed pool);
     event PoolRemoved(address indexed safe, address indexed pool);
     event EarningsCollected(

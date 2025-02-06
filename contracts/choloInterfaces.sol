@@ -246,3 +246,26 @@ interface IWETH {
 
     function withdraw(uint256 wad) external;
 }
+
+interface ICholoDromeModule {
+    /// @notice Swaps tokens. If token is native ETH (represented by address(0)), it will be wrapped to WETH.
+    /// If toToken is native ETH (address(0)), then received WETH is unwrapped.
+    function swap(
+        address token,
+        uint256 amountIn,
+        address toToken,
+        bool isEarning
+    ) external payable;
+
+    /// @notice Get the slippage tolerance for swaps
+    function slippageTolerance() external view returns (uint256);
+
+    /// @notice Get the USDC address
+    function USDC() external view returns (address);
+
+    /// @notice Get the WETH address
+    function WETH() external view returns (address);
+
+    /// @notice Get the swap router address
+    function swapRouter() external view returns (address);
+}
