@@ -95,7 +95,7 @@ async function main() {
 
   // Hard coded deposit simulation parameters
   const depositUSDC = 1000;
-  const ticksAbove = 10;
+  const ticksAbove = 5;
   const ticksBelow = 5;
 
   console.log("\nStarting deposit simulation with:");

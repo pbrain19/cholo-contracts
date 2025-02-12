@@ -108,12 +108,6 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       wallet
     );
 
-    const oldCholoDromeModule = new ethers.Contract(
-      OLD_ADDRESS,
-      CholoDromeModule.abi,
-      wallet
-    );
-
     // First approve all pools
     console.log("\nApproving pools...");
     try {
@@ -175,7 +169,7 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       const swapPaths = await Promise.all(
         PATHS_WE_NEED.map(async ({ tokenIn, tokenOut }) => {
           console.log(`Getting route for ${tokenIn} -> ${tokenOut}`);
-          let path = await oldCholoDromeModule.swapPaths(tokenIn, tokenOut);
+          let path = await choloDromeModule.swapPaths(tokenIn, tokenOut);
           console.log(`got path for ${tokenIn} -> ${tokenOut} path:`, path);
           if (!path || path === "0x") {
             console.log(

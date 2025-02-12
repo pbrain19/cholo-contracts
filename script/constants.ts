@@ -4,6 +4,7 @@ export const OP = "0x4200000000000000000000000000000000000042";
 export const USDC = "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85";
 export const ETH = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";
 export const WLD = "0xdC6fF44d5d932Cbd77B52E5612Ba0529DC6226F1";
+export const WETH = "0x4200000000000000000000000000000000000006";
 
 export const TOKEN_INFO = {
   [USDC.toLowerCase()]: {
@@ -30,11 +31,16 @@ export const TOKEN_INFO = {
     symbol: "ETH",
     decimals: 18,
   },
+  [WETH.toLowerCase()]: {
+    symbol: "WETH",
+    decimals: 18,
+  },
 } as const;
 
 export const poolsToApprove = [
   "0xebd5311bea1948e1441333976eadcfe5fbda777c",
   "0x4e5541815227e3272c405886149f45d2f437c7ff",
+  "0x478946bcd4a5a22b316470f5486fafb928c0ba25",
 ];
 
 export const PATHS_WE_NEED = [
@@ -62,6 +68,14 @@ export const PATHS_WE_NEED = [
     tokenIn: WLD,
     tokenOut: USDC,
   },
+  {
+    tokenIn: WETH,
+    tokenOut: USDC,
+  },
+  {
+    tokenIn: WETH,
+    tokenOut: USDT,
+  },
 ];
 
 export const PRICE_FEEDS = [
@@ -84,5 +98,10 @@ export const PRICE_FEEDS = [
     from: USDT,
     to: USDC,
     priceFeed: "0xECef79E109e997bCA29c1c0897ec9d7b03647F5E",
+  },
+  {
+    from: WETH,
+    to: USDC,
+    priceFeed: "0xb7B9A39CC63f856b90B364911CC324dC46aC1770",
   },
 ];
