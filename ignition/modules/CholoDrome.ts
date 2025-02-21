@@ -5,17 +5,17 @@ import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
 
 const CholoDromeModule = buildModule("CholoDromeModule", (m) => {
   // Constants from deploy.ts
-  const uniswapSwapRouterAddress = "0xE592427A0AEce92De3Edee1F18E0157C05861564";
-  const veloAddress = "0x9560e827af36c94d2ac33a39bce1fe78631088db";
-  const usdtAddress = "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58";
-  const usdcAddress = "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85";
+  const uniswapSwapRouterAddress = "0x2626664c2603336E57B271c5C0b26F421741e481";
+  const rewardToken = "0x940181a94A35A4569E4529A3CDfB74e38FD98631";
+  const usdtAddress = "0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2";
+  const usdcAddress = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
   const weth = "0x4200000000000000000000000000000000000006";
   const deployerAddress = m.getAccount(0);
 
   // Deploy CholoDromeModule with constructor parameters
   const choloDromeModule = m.contract("CholoDromeModule", [
     deployerAddress, // _owner
-    veloAddress, // _rewardToken
+    rewardToken, // _rewardToken
     usdtAddress, // _rewardStable
     uniswapSwapRouterAddress, // _swapRouter
     usdcAddress, // _usdc

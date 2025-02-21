@@ -15,15 +15,16 @@ import CholoDromeModule from "../artifacts/contracts/CholoDromeModule.sol/CholoD
 import { ethers } from "ethers";
 
 // Contract address from deployment
-const DEPLOYED_ADDRESS = "0xfD8B162f08c1c8D64E0Ed81AF65849C56C3500Ac";
-const OLD_ADDRESS = "0xC65843B14D3a190944Ecf0A1b3dec8D60370a1A7";
+// const DEPLOYED_ADDRESS = "0xfD8B162f08c1c8D64E0Ed81AF65849C56C3500Ac";
+const DEPLOYED_ADDRESS = "0xf157b549Ec9cd83045670D78D2c537D0759a8469";
+
 async function getRoute(
   tokenIn: string,
   tokenOut: string,
   provider: ethers.providers.BaseProvider
 ) {
   const router = new AlphaRouter({
-    chainId: 10, // Optimism
+    chainId: 8453, // Optimism
     provider: provider,
   });
 
@@ -36,7 +37,7 @@ async function getRoute(
 
   // Create token instances
   const tokenInInstance = new Token(
-    10, // Optimism chain ID
+    8453, // Optimism chain ID
     tokenIn,
     tokenInDecimals,
     "", // symbol - not needed for routing
@@ -44,7 +45,7 @@ async function getRoute(
   );
 
   const tokenOutInstance = new Token(
-    10, // Optimism chain ID
+    8453, // Optimism chain ID
     tokenOut,
     tokenOutDecimals,
     "", // symbol - not needed for routing
@@ -136,10 +137,7 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       const priceFeedsToUpdate = await Promise.all(
         PRICE_FEEDS.filter(async ({ from, to }) => {
           const priceFeed = await choloDromeModule.priceFeeds(from, to);
-          if (priceFeed || priceFeed === "0x") {
-            console.log(`Price feed for ${from} -> ${to} already set`);
-            return false;
-          }
+
           return true;
         })
       );

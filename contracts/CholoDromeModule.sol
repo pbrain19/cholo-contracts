@@ -5,7 +5,6 @@ import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@safe-global/safe-contracts/contracts/common/Enum.sol";
 import "./choloInterfaces.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 import "./ISafe.sol";
 
 contract CholoDromeModule is Ownable {
@@ -553,17 +552,16 @@ contract CholoDromeModule is Ownable {
             toToken
         );
 
-        ISwapRouter.ExactInputParams memory params = ISwapRouter
+        ISwapRouter02.ExactInputParams memory params = ISwapRouter02
             .ExactInputParams({
                 path: path,
                 recipient: address(safe),
-                deadline: block.timestamp + 300,
                 amountIn: amountIn,
                 amountOutMinimum: amountOutMinimum
             });
 
         bytes memory swapData = abi.encodeWithSelector(
-            ISwapRouter.exactInput.selector,
+            ISwapRouter02.exactInput.selector,
             params
         );
         require(
@@ -664,20 +662,21 @@ contract CholoDromeModule is Ownable {
         if (!isStaked) {
             // collect actual fees since collect can give u LP tokens and others
             (amount0, amount1) = _collectOwed(safe, nftManager, tokenId);
-            if (amount0 > 0) {
-                // Swap earned fees to USDT
-                require(
-                    _swapToStable(safe, token0, amount0),
-                    "Token0 swap failed"
-                );
-            }
+            // TODO: uncomment this when we know how we will deail with these tokens
+            // if (amount0 > 0) {
+            //     // Swap earned fees to USDT
+            //     require(
+            //         _swapToStable(safe, token0, amount0),
+            //         "Token0 swap failed"
+            //     );
+            // }
 
-            if (amount1 > 0) {
-                require(
-                    _swapToStable(safe, token1, amount1),
-                    "Token1 swap failed"
-                );
-            }
+            // if (amount1 > 0) {
+            //     require(
+            //         _swapToStable(safe, token1, amount1),
+            //         "Token1 swap failed"
+            //     );
+            // }
         }
 
         // Decrease liquidity if any
@@ -748,26 +747,6 @@ contract CholoDromeModule is Ownable {
 
         ISafe safe = ISafe(payable(msg.sender));
         address nftManager = ICLPool(pool).nft();
-        INonfungiblePositionManager nftPositionManager = INonfungiblePositionManager(
-                nftManager
-            );
-
-        // Get initial position details
-        (
-            ,
-            ,
-            address token0,
-            address token1,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-
-        ) = nftPositionManager.positions(tokenId);
-
         address gaugeAddress = ICLPool(pool).gauge();
         ICLGauge clGauge = ICLGauge(gaugeAddress);
 
@@ -806,18 +785,18 @@ contract CholoDromeModule is Ownable {
             (amount0, amount1) = _collectOwed(safe, nftManager, tokenId);
 
             // Swap collected fees to USDT if any
-            if (amount0 > 0) {
-                require(
-                    _swapToStable(safe, token0, amount0),
-                    "Token0 swap failed"
-                );
-            }
-            if (amount1 > 0) {
-                require(
-                    _swapToStable(safe, token1, amount1),
-                    "Token1 swap failed"
-                );
-            }
+            // if (amount0 > 0) {
+            //     require(
+            //         _swapToStable(safe, token0, amount0),
+            //         "Token0 swap failed"
+            //     );
+            // }
+            // if (amount1 > 0) {
+            //     require(
+            //         _swapToStable(safe, token1, amount1),
+            //         "Token1 swap failed"
+            //     );
+            // }
         }
 
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
@@ -849,9 +828,6 @@ contract CholoDromeModule is Ownable {
         address nftManager = ICLPool(pool).nft();
         address gaugeAddress = ICLPool(pool).gauge();
 
-        INonfungiblePositionManager nftPositionManager = INonfungiblePositionManager(
-                nftManager
-            );
         ICLGauge clGauge = ICLGauge(gaugeAddress);
 
         // Check if already staked
@@ -859,22 +835,6 @@ contract CholoDromeModule is Ownable {
         require(!isStaked, "Position already staked");
 
         uint256 initialUsdtBalance = _getUsdtBalance(address(safe));
-
-        // Get initial position details
-        (
-            ,
-            ,
-            address token0,
-            address token1,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-            ,
-
-        ) = nftPositionManager.positions(tokenId);
 
         // Collect any pending fees before staking
         (uint256 amount0, uint256 amount1) = _collectOwed(
@@ -884,12 +844,12 @@ contract CholoDromeModule is Ownable {
         );
 
         // Swap collected fees to USDT if any
-        if (amount0 > 0) {
-            require(_swapToStable(safe, token0, amount0), "Token0 swap failed");
-        }
-        if (amount1 > 0) {
-            require(_swapToStable(safe, token1, amount1), "Token1 swap failed");
-        }
+        // if (amount0 > 0) {
+        //     require(_swapToStable(safe, token0, amount0), "Token0 swap failed");
+        // }
+        // if (amount1 > 0) {
+        //     require(_swapToStable(safe, token1, amount1), "Token1 swap failed");
+        // }
 
         // Check if NFT approval is needed
         bool isApproved = INonfungiblePositionManager(nftManager)

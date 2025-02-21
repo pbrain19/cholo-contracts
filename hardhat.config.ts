@@ -26,6 +26,10 @@ const config: HardhatUserConfig = {
       url: process.env.PROVIDER_URL!,
       accounts: [process.env.PRIVATE_KEY!],
     },
+    base: {
+      url: process.env.BASE_PROVIDER_URL!,
+      accounts: [process.env.PRIVATE_KEY!],
+    },
   },
 
   sourcify: {
@@ -33,7 +37,7 @@ const config: HardhatUserConfig = {
   },
 
   etherscan: {
-    apiKey: process.env.ETHERSCAN_API_KEY!,
+    apiKey: process.env.BASE_ETHERSCAN_API_KEY!,
   },
   gasReporter: {
     coinmarketcap: process.env.COINMARKETCAP_API_KEY!,
