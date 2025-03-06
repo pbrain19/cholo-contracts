@@ -16,7 +16,7 @@ import { ethers } from "ethers";
 
 // Contract address from deployment
 // const DEPLOYED_ADDRESS = "0xfD8B162f08c1c8D64E0Ed81AF65849C56C3500Ac";
-const DEPLOYED_ADDRESS = "0xf157b549Ec9cd83045670D78D2c537D0759a8469";
+const DEPLOYED_ADDRESS = "0xee3941A2099B60e3dE45696b10A4F4dD7568C133";
 
 async function getRoute(
   tokenIn: string,
@@ -131,54 +131,31 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
       console.error("Error approving pools:", error);
     }
 
-    // Then set up all price feeds
-    console.log("\nSetting up price feeds...");
-    try {
-      const priceFeedsToUpdate = await Promise.all(
-        PRICE_FEEDS.filter(async ({ from, to }) => {
-          const priceFeed = await choloDromeModule.priceFeeds(from, to);
-
-          return true;
-        })
-      );
-
-      console.log("Price feeds to update:", priceFeedsToUpdate);
-
-      if (priceFeedsToUpdate.length) {
-        const tx = await choloDromeModule.setPriceFeeds(
-          priceFeedsToUpdate.map(({ from, to, priceFeed }) => ({
-            fromToken: from,
-            toToken: to,
-            priceFeed: priceFeed,
-          }))
-        );
-        console.log("Transaction hash:", tx.hash);
-        await tx.wait();
-        console.log("Price feeds set successfully!");
-      }
-    } catch (error) {
-      console.error("Error setting price feeds:", error);
-    }
-
     // Then set up all swap routes
     console.log("\nSetting up swap routes...");
     try {
       // First get all paths
-      const swapPaths = await Promise.all(
-        PATHS_WE_NEED.map(async ({ tokenIn, tokenOut }) => {
-          console.log(`Getting route for ${tokenIn} -> ${tokenOut}`);
-          let path = await choloDromeModule.swapPaths(tokenIn, tokenOut);
-          console.log(`got path for ${tokenIn} -> ${tokenOut} path:`, path);
-          if (!path || path === "0x") {
-            console.log(
-              `no path found for ${tokenIn} -> ${tokenOut}, getting new path`
-            );
-            path = await getRoute(tokenIn, tokenOut, provider);
-            console.log(
-              `got new path for ${tokenIn} -> ${tokenOut} path:`,
-              path
-            );
-          }
+      const swapPaths = [];
+
+      for (const { tokenIn, tokenOut } of PATHS_WE_NEED) {
+        const path = await choloDromeModule.swapPaths(tokenIn, tokenOut);
+
+        console.log(`path for ${tokenIn} -> ${tokenOut}:`, path);
+
+        if (!path || path === "0x") {
+          swapPaths.push({ tokenIn, tokenOut });
+        }
+      }
+
+      // console.log("swapPaths", swapPaths);
+
+      const pathsToSet = await Promise.all(
+        swapPaths.map(async ({ tokenIn, tokenOut }) => {
+          console.log(
+            `no path found for ${tokenIn} -> ${tokenOut}, getting new path`
+          );
+          const path = await getRoute(tokenIn, tokenOut, provider);
+          console.log(`got new path for ${tokenIn} -> ${tokenOut} path:`, path);
           return {
             fromToken: tokenIn,
             toToken: tokenOut,
@@ -187,8 +164,13 @@ task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
         })
       );
 
+      if (pathsToSet.length === 0) {
+        console.log("no paths needed to be set");
+        return;
+      }
+
       // Then set them all in one transaction
-      const tx = await choloDromeModule.setSwapPaths(swapPaths);
+      const tx = await choloDromeModule.setSwapPaths(pathsToSet);
       console.log("Transaction hash:", tx.hash);
       await tx.wait();
       console.log("Swap paths set successfully!");
