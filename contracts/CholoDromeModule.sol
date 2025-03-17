@@ -162,7 +162,7 @@ contract CholoDromeModule is Ownable {
     /// @param tokenIn The input token address
     /// @param amountIn The input amount
     /// @param tokenOut The output token address
-    /// @param tokenPrices Array of token prices relative to rewardStable
+    /// @param tokenPrices Array of token prices representing direct exchange rates (1 tokenIn = X tokenOut)
     /// @return The minimum amount out considering slippage
     function _calculateAmountOutMinimum(
         address tokenIn,
@@ -173,38 +173,23 @@ contract CholoDromeModule is Ownable {
         if (tokenIn == tokenOut) return amountIn;
         if (amountIn == 0) return 0;
 
-        // Get token decimals
-        uint8 tokenInDecimals = IERC20Metadata(tokenIn).decimals();
-        uint8 tokenOutDecimals = IERC20Metadata(tokenOut).decimals();
+        uint256 exchangeRate;
+        bool foundExchangeRate = false;
 
-        uint256 expectedAmount;
-        bool foundFromToken = false;
-        bool foundToToken = false;
-        uint256 fromTokenPrice;
-        uint256 toTokenPrice;
-
-        // Find token prices in the provided array
+        // Find exchange rate in the provided array
         for (uint256 i = 0; i < tokenPrices.length; i++) {
             if (tokenPrices[i].token == tokenIn) {
-                fromTokenPrice = tokenPrices[i].price;
-                foundFromToken = true;
+                exchangeRate = tokenPrices[i].price;
+                foundExchangeRate = true;
+                break;
             }
-            if (tokenPrices[i].token == tokenOut) {
-                toTokenPrice = tokenPrices[i].price;
-                foundToToken = true;
-            }
-            if (foundFromToken && foundToToken) break;
         }
 
-        // Both tokens need prices to calculate the exchange rate
-        require(foundFromToken && foundToToken, "Missing token price");
+        require(foundExchangeRate, "Exchange rate not found");
 
-        // Calculate expected amount based on relative prices
-        // If fromTokenPrice = 2e8 and toTokenPrice = 1e8, then 1 fromToken = 2 toToken
-        // amountIn * (fromTokenPrice / toTokenPrice) * 10^(decimals difference)
-        expectedAmount =
-            (amountIn * fromTokenPrice * (10 ** tokenOutDecimals)) /
-            (toTokenPrice * (10 ** tokenInDecimals));
+        // Calculate expected amount: amountIn * exchangeRate
+        // The exchange rate already accounts for decimals differences between tokens
+        uint256 expectedAmount = (amountIn * exchangeRate) / 1e18;
 
         // Apply slippage tolerance
         return

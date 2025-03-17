@@ -3,12 +3,7 @@ import { Currency, CurrencyAmount, Token, TradeType } from "@uniswap/sdk-core";
 import { encodeRouteToPath, Route } from "@uniswap/v3-sdk";
 import { Protocol } from "@uniswap/router-sdk";
 import { parseUnits } from "viem";
-import {
-  TOKEN_INFO,
-  PATHS_WE_NEED,
-  PRICE_FEEDS,
-  poolsToApprove,
-} from "./constants";
+import { TOKEN_INFO, PATHS_WE_NEED, poolsToApprove } from "./constants";
 import { task } from "hardhat/config";
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import CholoDromeModule from "../artifacts/contracts/CholoDromeModule.sol/CholoDromeModule.json";
@@ -16,7 +11,7 @@ import { ethers } from "ethers";
 
 // Contract address from deployment
 // const DEPLOYED_ADDRESS = "0xfD8B162f08c1c8D64E0Ed81AF65849C56C3500Ac";
-const DEPLOYED_ADDRESS = "0xee3941A2099B60e3dE45696b10A4F4dD7568C133";
+const DEPLOYED_ADDRESS = "0x71CEc225d23F542ef669365412e5740b7009d869";
 
 async function getRoute(
   tokenIn: string,
