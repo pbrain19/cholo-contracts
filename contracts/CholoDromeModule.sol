@@ -10,7 +10,7 @@ import "./ISafe.sol";
 contract CholoDromeModule is Ownable {
     address public rewardToken; // Velo token address
     address public rewardStable; // USDT token address
-    address public swapRouter; // Address of the Uniswap V3 Swap Router
+    address public universalRouter; // Address of the velodrome universal router
     address public immutable WETH; // Added state variable for WETH
 
     uint256 private constant SLIPPAGE_DENOMINATOR = 10000;
@@ -19,20 +19,11 @@ contract CholoDromeModule is Ownable {
     // Mapping to store approved pools
     mapping(address => bool) public approvedPools;
 
-    // Mapping to store encoded paths for swaps between two tokens
-    mapping(address => mapping(address => bytes)) public swapPaths;
-
-    // New struct for token prices relative to rewardStable (USDT)
+    // Updated struct for token prices relative to rewardStable (USDT) including swap path
     struct TokenPrice {
         address token;
-        uint256 price; // Price with 8 decimals (1e8 precision)
-    }
-
-    // Add this struct for swap paths
-    struct SwapPathData {
-        address fromToken;
-        address toToken;
-        bytes path;
+        uint256 price; // Price with decimals that varies based on token decimals relationship
+        bytes swapPath; // Direct encoded path to swap this token to the desired output token
     }
 
     event PoolApproved(address indexed safe, address indexed pool);
@@ -67,17 +58,17 @@ contract CholoDromeModule is Ownable {
         address _owner,
         address _rewardToken,
         address _rewardStable,
-        address _swapRouter,
+        address _universalRouter,
         address _weth
     ) Ownable(_owner) {
         require(_owner != address(0), "Invalid owner");
         require(_rewardToken != address(0), "Invalid reward token");
         require(_rewardStable != address(0), "Invalid reward stable");
-        require(_swapRouter != address(0), "Invalid swap router");
+        require(_universalRouter != address(0), "Invalid swap router");
         require(_weth != address(0), "Invalid WETH address");
         rewardToken = _rewardToken;
         rewardStable = _rewardStable;
-        swapRouter = _swapRouter;
+        universalRouter = _universalRouter;
         WETH = _weth;
     }
 
@@ -128,34 +119,22 @@ contract CholoDromeModule is Ownable {
         emit RewardStableUpdated(oldStable, _newRewardStable);
     }
 
-    /// @notice Update multiple swap paths in a single transaction
-    /// @param paths Array of swap path data containing token pairs and their corresponding encoded paths
-    function setSwapPaths(SwapPathData[] calldata paths) external onlyOwner {
-        uint256 length = paths.length;
-        for (uint256 i = 0; i < length; ) {
-            SwapPathData calldata pathData = paths[i];
-            require(pathData.fromToken != address(0), "Invalid from token");
-            require(pathData.toToken != address(0), "Invalid to token");
-            require(pathData.path.length > 0, "Invalid path");
-
-            swapPaths[pathData.fromToken][pathData.toToken] = pathData.path;
-
-            unchecked {
-                ++i;
-            }
-        }
-    }
-
-    /// @notice Retrieve the swap path for a given token pair
-    /// @param fromToken The address of the token to swap from
-    /// @param toToken The address of the token to swap to
+    /// @notice Retrieve the swap path for a given token from the TokenPrice array
+    /// @param token The address of the token to swap from
+    /// @param tokenPrices Array of token prices with swap paths
     /// @return path The encoded path for the swap
     function _getSwapPath(
-        address fromToken,
-        address toToken
-    ) internal view returns (bytes memory path) {
-        path = swapPaths[fromToken][toToken];
-        require(path.length > 0, "Swap path not set");
+        address token,
+        TokenPrice[] memory tokenPrices
+    ) internal pure returns (bytes memory path) {
+        for (uint256 i = 0; i < tokenPrices.length; i++) {
+            if (tokenPrices[i].token == token) {
+                path = tokenPrices[i].swapPath;
+                require(path.length > 0, "Swap path not set for token");
+                return path;
+            }
+        }
+        revert("Token not found in price array");
     }
 
     /// @notice Calculate the minimum amount out with slippage tolerance using provided token prices
@@ -173,6 +152,10 @@ contract CholoDromeModule is Ownable {
         if (tokenIn == tokenOut) return amountIn;
         if (amountIn == 0) return 0;
 
+        // Get decimals for both tokens
+        uint8 decimalsIn = IERC20Metadata(tokenIn).decimals();
+        uint8 decimalsOut = IERC20Metadata(tokenOut).decimals();
+
         uint256 exchangeRate;
         bool foundExchangeRate = false;
 
@@ -187,9 +170,28 @@ contract CholoDromeModule is Ownable {
 
         require(foundExchangeRate, "Exchange rate not found");
 
-        // Calculate expected amount: amountIn * exchangeRate
-        // The exchange rate already accounts for decimals differences between tokens
-        uint256 expectedAmount = (amountIn * exchangeRate) / 1e18;
+        // Calculate expected amount based on token decimals
+        uint256 expectedAmount;
+
+        if (decimalsIn == decimalsOut) {
+            // If input and output tokens have the same decimals, assume rate is in 18 decimals
+            uint256 scaleIn = 10 ** decimalsIn;
+            uint256 scaleOut = 10 ** decimalsOut;
+            uint256 e18 = 10 ** 18;
+
+            uint256 numerator = amountIn * exchangeRate * scaleOut;
+            uint256 denominator = scaleIn * e18;
+
+            expectedAmount = numerator / denominator;
+        } else {
+            // If decimals differ, assume rate is in the output token's decimals
+            uint256 scaleIn = 10 ** decimalsIn;
+
+            uint256 numerator = amountIn * exchangeRate;
+            uint256 denominator = scaleIn;
+
+            expectedAmount = numerator / denominator;
+        }
 
         // Apply slippage tolerance
         return
@@ -404,12 +406,12 @@ contract CholoDromeModule is Ownable {
 
         require(token != toToken, "Cannot swap to same token");
 
-        bytes memory path = _getSwapPath(token, toToken);
+        bytes memory path = _getSwapPath(token, tokenPrices);
 
         // Approve the swap router to spend the input token
         bytes memory approveData = abi.encodeWithSelector(
             IERC20.approve.selector,
-            swapRouter,
+            universalRouter,
             amountIn
         );
         require(
@@ -429,23 +431,37 @@ contract CholoDromeModule is Ownable {
             tokenPrices
         );
 
-        ISwapRouter02.ExactInputParams memory params = ISwapRouter02
-            .ExactInputParams({
-                path: path,
-                recipient: address(safe),
-                amountIn: amountIn,
-                amountOutMinimum: amountOutMinimum
-            });
+        // Prepare command and inputs for the Universal Router
+        // Based on Velodrome's implementation of Universal Router
+        // Command 0x0c is for V3_SWAP_EXACT_IN in Velodrome's Universal Router
+        bytes memory commands = hex"0c"; // V3_SWAP_EXACT_IN command
 
-        bytes memory swapData = abi.encodeWithSelector(
-            ISwapRouter02.exactInput.selector,
-            params
+        // Prepare input data for the V3_SWAP_EXACT_IN command
+        // For Velodrome's Universal Router V3 swap, the parameters are:
+        // (recipient, amountIn, amountOutMinimum, path, payerIsUser)
+        bytes memory v3SwapExactInParams = abi.encode(
+            address(safe), // recipient
+            amountIn, // amountIn
+            amountOutMinimum, // amountOutMinimum
+            path // path for the swap
         );
+
+        bytes[] memory inputs = new bytes[](1);
+        inputs[0] = v3SwapExactInParams;
+
+        // Call the Universal Router with a reasonable deadline
+        bytes memory universalRouterData = abi.encodeWithSelector(
+            IUniversalRouter.execute.selector,
+            commands,
+            inputs,
+            block.timestamp + 1200 // 20 minute deadline
+        );
+
         require(
             safe.execTransactionFromModule(
-                swapRouter,
+                universalRouter,
                 0,
-                swapData,
+                universalRouterData,
                 Enum.Operation.Call
             ),
             "Swap execution failed"
@@ -486,21 +502,25 @@ contract CholoDromeModule is Ownable {
         if (amountIn == 0) return true;
         if (token == rewardStable) return true;
 
-        // Check if the price for this token is provided
-        bool priceFound = false;
+        // Check if the price and swap path for this token is provided
+        bool tokenFound = false;
         for (uint256 i = 0; i < tokenPrices.length; i++) {
             if (tokenPrices[i].token == token) {
-                priceFound = true;
+                tokenFound = true;
+                require(
+                    tokenPrices[i].swapPath.length > 0,
+                    "Swap path not set for token"
+                );
                 break;
             }
         }
 
-        // Only perform the swap if we have a price for this token
-        if (priceFound) {
+        // Only perform the swap if we have price and path for this token
+        if (tokenFound) {
             return _swap(safe, token, amountIn, rewardStable, tokenPrices);
         }
 
-        // If no price is provided, don't swap
+        // If token not found in prices array, don't swap
         return true;
     }
 

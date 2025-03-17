@@ -88,34 +88,34 @@ export const poolsToApprove = [
 ];
 
 export const PATHS_WE_NEED = [
-  {
-    tokenIn: USDC,
-    tokenOut: USDT,
-  },
-  {
-    tokenIn: AERO,
-    tokenOut: USDT,
-  },
-  {
-    tokenIn: TOSHI,
-    tokenOut: USDT,
-  },
-  {
-    tokenIn: CBBTC,
-    tokenOut: USDT,
-  },
+  // {
+  //   tokenIn: USDC,
+  //   tokenOut: USDT,
+  // },
+  // {
+  //   tokenIn: AERO,
+  //   tokenOut: USDT,
+  // },
+  // {
+  //   tokenIn: TOSHI,
+  //   tokenOut: USDT,
+  // },
+  // {
+  //   tokenIn: CBBTC,
+  //   tokenOut: USDT,
+  // },
   {
     tokenIn: KAIKO,
     tokenOut: USDT,
   },
-  {
-    tokenIn: TRUMP,
-    tokenOut: USDT,
-  },
-  {
-    tokenIn: VENICE,
-    tokenOut: USDT,
-  },
+  // {
+  //   tokenIn: TRUMP,
+  //   tokenOut: USDT,
+  // },
+  // {
+  //   tokenIn: VENICE,
+  //   tokenOut: USDT,
+  // },
   // {
   //   tokenIn: OP,
   //   tokenOut: USDC,
@@ -128,8 +128,8 @@ export const PATHS_WE_NEED = [
   //   tokenIn: WETH,
   //   tokenOut: USDC,
   // },
-  {
-    tokenIn: WETH,
-    tokenOut: USDT,
-  },
+  // {
+  //   tokenIn: WETH,
+  //   tokenOut: USDT,
+  // },
 ];
