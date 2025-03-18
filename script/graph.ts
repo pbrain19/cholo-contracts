@@ -17,7 +17,7 @@ export interface Route {
   stable: boolean;
   factory: string;
   poolAddress: string;
-  fee?: number; // Add fee property for path encoding
+  pool_fee: number; // Add fee property for path encoding
 }
 
 export interface Pool {
@@ -26,6 +26,7 @@ export interface Pool {
   lp: string;
   type: number;
   factory: string;
+  pool_fee: number;
   [key: string]: any;
 }
 
@@ -100,7 +101,7 @@ export function buildGraph(pairs: Pool[]): [CustomGraph, Record<string, Pool>] {
 
       // Set default fee based on pool type for Velodrome/Aerodrome
       // Stable: 1 bps (0.01%), Volatile: 500 bps (5.00%)
-      const fee = pair.fee || (isStable ? 100 : 500);
+      const fee = pair.pool_fee;
 
       // Add nodes if they don't exist
       if (!graph.hasNode(tokenA)) graph.addNode(tokenA);
@@ -202,7 +203,7 @@ export function getRoutes(
           to: direction === "direct" ? pair.token1 : pair.token0,
           stable: pair.stable,
           factory: pair.factory,
-          fee: pair.fee,
+          pool_fee: pair.pool_fee,
           poolAddress: pair.lp,
         };
 
@@ -282,7 +283,7 @@ export function encodeRouteToPath(
     // - 1 bps (0.01%) for stable pools
     // - 500 bps (5%) for volatile pools
     // These values are placeholders and should be adjusted as needed
-    const fee = segment.fee || (segment.stable ? 1 : 500);
+    const fee = segment.pool_fee;
     path.push(fee);
 
     // Add destination token
@@ -394,7 +395,7 @@ export function formatRoutePath(route: Route[]): string {
 
   for (const segment of route) {
     // Get fee description
-    const feeValue = segment.fee || (segment.stable ? 1 : 500);
+    const feeValue = segment.pool_fee;
     const feeDesc = segment.stable ? "stable" : "volatile";
 
     result += ` -[${feeValue} (${feeDesc})]-> ${segment.to}`;
