@@ -2,12 +2,22 @@
 import { Graph } from "graphology";
 // @ts-ignore
 import { allSimpleEdgeGroupPaths } from "graphology-simple-path";
+import { chunk } from "lodash";
+import VeloRouterAbi from "./abi/VeloRouter.json";
+import { Contract, providers, utils as ethersUtils } from "ethers";
+import SugarAbi from "./abi/Sugar.json";
+
+// Define a CustomGraph type to fix TS errors
+// @ts-ignore
+type CustomGraph = Graph<GraphAttributes, GraphAttributes, GraphAttributes>;
 
 export interface Route {
   from: string;
   to: string;
   stable: boolean;
   factory: string;
+  poolAddress: string;
+  fee?: number; // Add fee property for path encoding
 }
 
 export interface Pool {
@@ -22,9 +32,52 @@ export interface Pool {
 interface GraphAttributes {
   stable?: boolean;
   factory?: string;
+  fee?: number;
 }
 
-type CustomGraph = Graph<GraphAttributes, GraphAttributes, GraphAttributes>;
+// Sugar contract for fetching pools
+const VELO_SUGAR = "0x63a73829C74e936C1D2EEbE64164694f16700138";
+
+/**
+ * Fetches pools from the Velodrome/Aerodrome sugar contract
+ *
+ * @param provider Ethers provider
+ * @returns Array of pools
+ */
+export async function getPools(provider: providers.Provider): Promise<Pool[]> {
+  const sugarContract = new Contract(
+    VELO_SUGAR.toLowerCase(),
+    SugarAbi,
+    provider
+  );
+
+  const POOLS_TO_FETCH = 8000;
+  const chunkSize = 400;
+  const allPools: Pool[] = [];
+
+  for (
+    let startIndex = 0;
+    startIndex < POOLS_TO_FETCH;
+    startIndex += chunkSize
+  ) {
+    const endIndex = Math.min(startIndex + chunkSize, POOLS_TO_FETCH);
+    try {
+      const pools = await sugarContract.forSwaps(
+        endIndex - startIndex,
+        startIndex
+      );
+      allPools.push(...pools);
+    } catch (err) {
+      console.error(
+        `Failed to fetch pools from ${startIndex} to ${endIndex}:`,
+        err
+      );
+      break;
+    }
+  }
+
+  return allPools;
+}
 
 /**
  * Returns pairs graph and a map of pairs to their addresses
@@ -45,6 +98,10 @@ export function buildGraph(pairs: Pool[]): [CustomGraph, Record<string, Pool>] {
       const pairAddress = pair.lp.toLowerCase();
       const isStable = pair.type === 0;
 
+      // Set default fee based on pool type for Velodrome/Aerodrome
+      // Stable: 1 bps (0.01%), Volatile: 500 bps (5.00%)
+      const fee = pair.fee || (isStable ? 100 : 500);
+
       // Add nodes if they don't exist
       if (!graph.hasNode(tokenA)) graph.addNode(tokenA);
       if (!graph.hasNode(tokenB)) graph.addNode(tokenB);
@@ -53,10 +110,12 @@ export function buildGraph(pairs: Pool[]): [CustomGraph, Record<string, Pool>] {
       graph.addEdgeWithKey(`direct:${pairAddress}`, tokenA, tokenB, {
         stable: isStable,
         factory: pair.factory,
+        fee: fee,
       });
       graph.addEdgeWithKey(`reversed:${pairAddress}`, tokenB, tokenA, {
         stable: isStable,
         factory: pair.factory,
+        fee: fee,
       });
 
       pairsByAddress[pairAddress] = {
@@ -66,6 +125,7 @@ export function buildGraph(pairs: Pool[]): [CustomGraph, Record<string, Pool>] {
         token1: tokenB,
         lp: pairAddress,
         stable: isStable,
+        fee: fee,
       };
     });
   }
@@ -142,6 +202,8 @@ export function getRoutes(
           to: direction === "direct" ? pair.token1 : pair.token0,
           stable: pair.stable,
           factory: pair.factory,
+          fee: pair.fee,
+          poolAddress: pair.lp,
         };
 
         // For the first hop, create new path sets
@@ -186,4 +248,197 @@ export function getRoutes(
   }
 
   return paths;
+}
+export type Quote = {
+  route: Route[];
+  amount: BigInt;
+  amountOut: BigInt;
+  amountsOut: BigInt[];
+};
+
+/**
+ * Encodes a route to a hex path suitable for router contracts
+ * Based on Uniswap's implementation but adapted for our Route type
+ *
+ * @param route Array of route segments
+ * @param exactOutput Whether to reverse the path for exact output swaps
+ * @returns Encoded path as a hex string
+ */
+export function encodeRouteToPath(
+  route: Route[],
+  exactOutput: boolean = false
+): string {
+  if (!route || route.length === 0) return "0x";
+
+  // Create path array: [tokenA, feeAB, tokenB, feeBC, tokenC]
+  const path: (string | number)[] = [];
+
+  // Add first token (from of first route segment)
+  path.push(route[0].from);
+
+  // Add each route segment (fee and destination token)
+  for (const segment of route) {
+    // For Velodrome/Aerodrome, we use a specific fee encoding:
+    // - 1 bps (0.01%) for stable pools
+    // - 500 bps (5%) for volatile pools
+    // These values are placeholders and should be adjusted as needed
+    const fee = segment.fee || (segment.stable ? 1 : 500);
+    path.push(fee);
+
+    // Add destination token
+    path.push(segment.to);
+  }
+
+  // If exactOutput is true, reverse the path
+  const finalPath = exactOutput ? [...path].reverse() : path;
+
+  // Encode the path with proper hex formatting
+  let encoded = "";
+
+  for (let i = 0; i < finalPath.length; i++) {
+    const item = finalPath[i];
+
+    if (i % 2 === 0) {
+      // Token address (20 bytes)
+      const cleanAddress = item.toString().toLowerCase().replace(/^0x/, "");
+      encoded += cleanAddress;
+    } else {
+      // Fee (3 bytes)
+      const feeHex = ethersUtils
+        .hexZeroPad(ethersUtils.hexlify(Number(item)), 3)
+        .slice(2);
+      encoded += feeHex;
+    }
+  }
+
+  return "0x" + encoded;
+}
+
+const ROUTER_ADDRESS = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43";
+export async function fetchQuote(
+  routes: Route[][],
+  amount: BigInt,
+  provider: providers.Provider,
+  chunkSize = 50
+) {
+  console.log(`Fetching quote for ${routes.length} routes`);
+  const routeChunks = chunk(routes, chunkSize);
+  const router: Contract = new Contract(
+    ROUTER_ADDRESS,
+    VeloRouterAbi,
+    provider
+  );
+
+  let quoteChunks: Quote[] = [];
+  // Split into chunks and get the route quotes...
+  for (const routeChunk of routeChunks) {
+    for (const route of routeChunk) {
+      console.log(
+        `Fetching quote for route ${route
+          .map((r) => r.from + " -> " + r.to + " (" + r.factory + ")")
+          .join(" then ")}`
+      );
+
+      let amountsOut: BigInt[];
+      try {
+        amountsOut = await router.getAmountsOut(amount, route);
+      } catch (err) {
+        amountsOut = [];
+      }
+
+      // Ignore bad quotes...
+      if (amountsOut && amountsOut.length >= 1) {
+        const amountOut = amountsOut[amountsOut.length - 1];
+
+        // Ignore zero quotes...
+        if (amountOut !== BigInt(0)) {
+          quoteChunks.push({ route, amount, amountOut, amountsOut });
+        }
+      }
+    }
+  }
+
+  console.log(`Found ${quoteChunks.flat().length} quotes`);
+  // Filter out bad quotes and find the best one...
+  const bestQuote = quoteChunks
+    .flat()
+    .filter(Boolean)
+    .reduce((best, quote) => {
+      if (!best) {
+        return quote;
+      } else {
+        return best.amountOut > quote.amountOut ? best : quote;
+      }
+    }, null as Quote | null);
+
+  if (!bestQuote) {
+    console.log("No best quote found");
+    return null;
+  }
+
+  console.log(`Best quote: ${bestQuote.amountOut.toString()}`);
+
+  return bestQuote;
+}
+
+/**
+ * Creates a human-readable representation of a swap path
+ *
+ * @param route The route segments
+ * @returns A user-friendly string showing tokens and fees in the path
+ */
+export function formatRoutePath(route: Route[]): string {
+  if (!route || route.length === 0) return "";
+
+  let result = route[0].from;
+
+  for (const segment of route) {
+    // Get fee description
+    const feeValue = segment.fee || (segment.stable ? 1 : 500);
+    const feeDesc = segment.stable ? "stable" : "volatile";
+
+    result += ` -[${feeValue} (${feeDesc})]-> ${segment.to}`;
+  }
+
+  return result;
+}
+
+// Utility function to debug a path encoded for routers
+export function debugEncodedPath(encodedPath: string): string {
+  if (!encodedPath || encodedPath === "0x" || encodedPath.length < 42) {
+    return "Invalid encoded path";
+  }
+
+  let result = "";
+  const path = encodedPath.slice(2); // Remove '0x'
+
+  // Extract tokens and fees
+  let i = 0;
+  while (i < path.length) {
+    // Token address (20 bytes = 40 hex chars)
+    if (i + 40 <= path.length) {
+      const tokenAddress = "0x" + path.slice(i, i + 40);
+      result += tokenAddress;
+      i += 40;
+
+      // Fee (3 bytes = 6 hex chars)
+      if (i + 6 <= path.length) {
+        const feeHex = "0x" + path.slice(i, i + 6);
+        const fee = parseInt(feeHex, 16);
+        result += ` -[${fee}]-> `;
+        i += 6;
+      } else {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  // Remove trailing arrow if present
+  if (result.endsWith(" -> ")) {
+    result = result.slice(0, -4);
+  }
+
+  return result;
 }
