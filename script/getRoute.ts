@@ -6,7 +6,7 @@ import { ethers } from "ethers";
 
 // Contract address from deployment
 // const DEPLOYED_ADDRESS = "0xfD8B162f08c1c8D64E0Ed81AF65849C56C3500Ac";
-const DEPLOYED_ADDRESS = "0x71CEc225d23F542ef669365412e5740b7009d869";
+const DEPLOYED_ADDRESS = "0x39fcaE2F5CEe795fd5436948228608e74413F4e0";
 
 task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
   async (_, hre: HardhatRuntimeEnvironment) => {

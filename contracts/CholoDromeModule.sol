@@ -427,7 +427,7 @@ contract CholoDromeModule is Ownable {
         // Prepare command and inputs for the Universal Router
         // Based on Velodrome's implementation of Universal Router
         // Command 0x0c is for V3_SWAP_EXACT_IN in Velodrome's Universal Router
-        bytes memory commands = hex"0c"; // V3_SWAP_EXACT_IN command
+        bytes memory commands = hex"00"; // V3_SWAP_EXACT_IN command
 
         // Prepare input data for the V3_SWAP_EXACT_IN command
         // For Velodrome's Universal Router V3 swap, the parameters are:
