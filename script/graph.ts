@@ -3,10 +3,9 @@ import { Graph } from "graphology";
 // @ts-ignore
 import { allSimpleEdgeGroupPaths } from "graphology-simple-path";
 import { chunk } from "lodash";
-import VeloRouterAbi from "./abi/VeloRouter.json";
 import { Contract, providers, utils as ethersUtils } from "ethers";
 import SugarAbi from "./abi/Sugar.json";
-
+import MixedQuoterAbi from "./abi/MixedQuoter.json";
 // Define a CustomGraph type to fix TS errors
 // @ts-ignore
 type CustomGraph = Graph<GraphAttributes, GraphAttributes, GraphAttributes>;
@@ -17,6 +16,7 @@ export interface Route {
   stable: boolean;
   factory: string;
   poolAddress: string;
+  pool: Pool;
   pool_fee: number; // Add fee property for path encoding
 }
 
@@ -38,6 +38,8 @@ interface GraphAttributes {
 
 // Sugar contract for fetching pools
 const VELO_SUGAR = "0x63a73829C74e936C1D2EEbE64164694f16700138";
+const MIXED_QUOTER_ADDRESS = "0x0A5aA5D3a4d28014f967Bf0f29EAA3FF9807D5c6";
+const FACTORY_V2 = "0xF4d73326C13a4Fc5FD7A064217e12780e9Bd62c3";
 
 /**
  * Fetches pools from the Velodrome/Aerodrome sugar contract
@@ -67,7 +69,12 @@ export async function getPools(provider: providers.Provider): Promise<Pool[]> {
         endIndex - startIndex,
         startIndex
       );
-      allPools.push(...pools);
+
+      if (pools.length > 0) {
+        allPools.push(...pools);
+      } else {
+        break;
+      }
     } catch (err) {
       console.error(
         `Failed to fetch pools from ${startIndex} to ${endIndex}:`,
@@ -97,7 +104,7 @@ export function buildGraph(pairs: Pool[]): [CustomGraph, Record<string, Pool>] {
       const tokenA = pair.token0.toLowerCase();
       const tokenB = pair.token1.toLowerCase();
       const pairAddress = pair.lp.toLowerCase();
-      const isStable = pair.type === 0;
+      const isStable = Number(pair.type) === 0;
 
       // Set default fee based on pool type for Velodrome/Aerodrome
       // Stable: 1 bps (0.01%), Volatile: 500 bps (5.00%)
@@ -205,6 +212,7 @@ export function getRoutes(
           factory: pair.factory,
           pool_fee: pair.pool_fee,
           poolAddress: pair.lp,
+          pool: pair,
         };
 
         // For the first hop, create new path sets
@@ -271,6 +279,10 @@ export function encodeRouteToPath(
 ): string {
   if (!route || route.length === 0) return "0x";
 
+  // Constants for V2 pool fee encoding
+  const VOLATILE_V2_FEE = 4194304; // hex 0x400000
+  const STABLE_V2_FEE = 2097152; // hex 0x200000
+
   // Create path array: [tokenA, feeAB, tokenB, feeBC, tokenC]
   const path: (string | number)[] = [];
 
@@ -279,11 +291,21 @@ export function encodeRouteToPath(
 
   // Add each route segment (fee and destination token)
   for (const segment of route) {
-    // For Velodrome/Aerodrome, we use a specific fee encoding:
-    // - 1 bps (0.01%) for stable pools
-    // - 500 bps (5%) for volatile pools
-    // These values are placeholders and should be adjusted as needed
-    const fee = segment.pool_fee;
+    // For V2 pools, type is -1 (stable) or 0 (volatile)
+    // For V3 pools, type is the tickSpacing value (positive)
+    let fee;
+    if (segment.pool.type <= 0) {
+      // V2 pools
+      fee = segment.stable ? STABLE_V2_FEE : VOLATILE_V2_FEE;
+    } else {
+      // V3 pools - use type as tickSpacing
+      fee = segment.pool.type;
+    }
+
+    console.log(
+      `Encoding path segment: ${segment.from} -> ${segment.to}, pool type: ${segment.pool.type}, fee: ${fee}`
+    );
+
     path.push(fee);
 
     // Add destination token
@@ -302,7 +324,7 @@ export function encodeRouteToPath(
     if (i % 2 === 0) {
       // Token address (20 bytes)
       const cleanAddress = item.toString().toLowerCase().replace(/^0x/, "");
-      encoded += cleanAddress;
+      encoded += cleanAddress.padStart(40, "0");
     } else {
       // Fee (3 bytes)
       const feeHex = ethersUtils
@@ -315,7 +337,6 @@ export function encodeRouteToPath(
   return "0x" + encoded;
 }
 
-const ROUTER_ADDRESS = "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43";
 export async function fetchQuote(
   routes: Route[][],
   amount: BigInt,
@@ -325,8 +346,8 @@ export async function fetchQuote(
   console.log(`Fetching quote for ${routes.length} routes`);
   const routeChunks = chunk(routes, chunkSize);
   const router: Contract = new Contract(
-    ROUTER_ADDRESS,
-    VeloRouterAbi,
+    MIXED_QUOTER_ADDRESS,
+    MixedQuoterAbi,
     provider
   );
 
@@ -334,22 +355,27 @@ export async function fetchQuote(
   // Split into chunks and get the route quotes...
   for (const routeChunk of routeChunks) {
     for (const route of routeChunk) {
-      console.log(
-        `Fetching quote for route ${route
-          .map((r) => r.from + " -> " + r.to + " (" + r.factory + ")")
-          .join(" then ")}`
-      );
-
       let amountsOut: BigInt[];
       try {
-        amountsOut = await router.getAmountsOut(amount, route);
+        // Encode the path according to the contract's requirements
+        const encodedPath = encodeRouteToPath(route, false);
+        const [
+          amountOut,
+          sqrtPriceX96AfterList,
+          initializedTicksCrossedList,
+          gasEstimate,
+        ] = await router.callStatic.quoteExactInput(encodedPath, amount);
+        console.log("amountOut:", amountOut.toString());
+        // Store the quote result
+        amountsOut = [amountOut];
       } catch (err) {
+        console.error("Error fetching quote:", err);
         amountsOut = [];
       }
 
       // Ignore bad quotes...
       if (amountsOut && amountsOut.length >= 1) {
-        const amountOut = amountsOut[amountsOut.length - 1];
+        const amountOut = BigInt(amountsOut[amountsOut.length - 1].toString());
 
         // Ignore zero quotes...
         if (amountOut !== BigInt(0)) {
@@ -359,16 +385,19 @@ export async function fetchQuote(
     }
   }
 
-  console.log(`Found ${quoteChunks.flat().length} quotes`);
   // Filter out bad quotes and find the best one...
   const bestQuote = quoteChunks
     .flat()
     .filter(Boolean)
     .reduce((best, quote) => {
+      console.log("quote:", quote.amountOut.toString());
       if (!best) {
         return quote;
       } else {
-        return best.amountOut > quote.amountOut ? best : quote;
+        return BigInt(best.amountOut.toString()) <
+          BigInt(quote.amountOut.toString())
+          ? quote
+          : best;
       }
     }, null as Quote | null);
 
