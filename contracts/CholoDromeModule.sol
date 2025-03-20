@@ -20,7 +20,7 @@ contract CholoDromeModule is Ownable {
     mapping(address => bool) public approvedPools;
 
     // Updated struct for token prices relative to rewardStable (USDT) including swap path
-    struct TokenPrice {
+    struct TokenData {
         address token;
         uint256 price; // Price with decimals that varies based on token decimals relationship
         bytes swapPath; // Direct encoded path to swap this token to the desired output token
@@ -119,35 +119,34 @@ contract CholoDromeModule is Ownable {
         emit RewardStableUpdated(oldStable, _newRewardStable);
     }
 
-    /// @notice Retrieve the swap path for a given token from the TokenPrice array
-    /// @param token The address of the token to swap from
-    /// @param tokenPrices Array of token prices with swap paths
-    /// @return path The encoded path for the swap
-    function _getSwapPath(
+    /// @notice Helper function to get token data from the array
+    /// @param token The token address to look up
+    /// @param tokenData Array of token prices with swap paths
+    /// @return data The token data if found, with price and swap path
+    /// @return exists Whether the token data was found
+    function _getTokenData(
         address token,
-        TokenPrice[] memory tokenPrices
-    ) internal pure returns (bytes memory path) {
-        for (uint256 i = 0; i < tokenPrices.length; i++) {
-            if (tokenPrices[i].token == token) {
-                path = tokenPrices[i].swapPath;
-                require(path.length > 0, "Swap path not set for token");
-                return path;
+        TokenData[] memory tokenData
+    ) internal pure returns (TokenData memory data, bool exists) {
+        for (uint256 i = 0; i < tokenData.length; i++) {
+            if (tokenData[i].token == token) {
+                return (tokenData[i], true);
             }
         }
-        revert("Token not found in price array");
+        return (TokenData(address(0), 0, ""), false);
     }
 
     /// @notice Calculate the minimum amount out with slippage tolerance using provided token prices
     /// @param tokenIn The input token address
     /// @param amountIn The input amount
     /// @param tokenOut The output token address
-    /// @param tokenPrices Array of token prices representing direct exchange rates (1 tokenIn = X tokenOut)
+    /// @param tokenData Array of token prices representing direct exchange rates (1 tokenIn = X tokenOut)
     /// @return The minimum amount out considering slippage
     function _calculateAmountOutMinimum(
         address tokenIn,
         uint256 amountIn,
         address tokenOut,
-        TokenPrice[] memory tokenPrices
+        TokenData memory tokenData
     ) internal view returns (uint256) {
         if (tokenIn == tokenOut) return amountIn;
         if (amountIn == 0) return 0;
@@ -156,19 +155,7 @@ contract CholoDromeModule is Ownable {
         uint8 decimalsIn = IERC20Metadata(tokenIn).decimals();
         uint8 decimalsOut = IERC20Metadata(tokenOut).decimals();
 
-        uint256 exchangeRate;
-        bool foundExchangeRate = false;
-
-        // Find exchange rate in the provided array
-        for (uint256 i = 0; i < tokenPrices.length; i++) {
-            if (tokenPrices[i].token == tokenIn) {
-                exchangeRate = tokenPrices[i].price;
-                foundExchangeRate = true;
-                break;
-            }
-        }
-
-        require(foundExchangeRate, "Exchange rate not found");
+        uint256 exchangeRate = tokenData.price;
 
         // Calculate expected amount based on token decimals
         uint256 expectedAmount;
@@ -202,7 +189,7 @@ contract CholoDromeModule is Ownable {
     function unstakeAndCollect(
         address pool,
         uint256 tokenId,
-        TokenPrice[] calldata tokenPrices
+        TokenData[] calldata tokenData
     ) external {
         require(approvedPools[pool], "Pool not approved for this module");
 
@@ -217,7 +204,7 @@ contract CholoDromeModule is Ownable {
 
         uint256 veloAmount = clGauge.earned(address(safe), tokenId);
 
-        _handleUnstakeAndCollect(safe, gaugeAddress, tokenId, tokenPrices);
+        _handleUnstakeAndCollect(safe, gaugeAddress, tokenId, tokenData);
 
         uint256 finalUsdtBalance = _getUsdtBalance(address(safe));
         uint256 totalUsdtAmount = finalUsdtBalance - initialUsdtBalance;
@@ -238,7 +225,7 @@ contract CholoDromeModule is Ownable {
         ISafe safe,
         address gauge,
         uint256 tokenId,
-        TokenPrice[] memory tokenPrices
+        TokenData[] memory tokenData
     ) internal {
         require(gauge != address(0), "Invalid gauge");
 
@@ -266,7 +253,7 @@ contract CholoDromeModule is Ownable {
 
         if (amount > 0) {
             require(
-                _swapToStable(safe, rewardToken, amount, tokenPrices),
+                _swapToStable(safe, rewardToken, amount, tokenData),
                 "Swap to stable failed"
             );
         }
@@ -335,18 +322,26 @@ contract CholoDromeModule is Ownable {
         uint256 amountIn,
         address toToken,
         bool isEarning,
-        TokenPrice[] calldata tokenPrices
+        TokenData[] calldata tokenData
     ) public payable {
         ISafe safe = ISafe(payable(msg.sender));
         uint256 amountOut;
+
+        (TokenData memory tokenDataFound, bool exists) = _getTokenData(
+            token,
+            tokenData
+        );
+
+        require(exists, "Token not found in price array");
+
         if (toToken == address(0)) {
             uint256 balanceBefore = address(safe).balance;
-            _swap(safe, token, amountIn, toToken, tokenPrices);
+            _swap(safe, token, amountIn, toToken, tokenDataFound);
             uint256 balanceAfter = address(safe).balance;
             amountOut = balanceAfter - balanceBefore;
         } else {
             uint256 balanceBefore = IERC20(toToken).balanceOf(address(safe));
-            _swap(safe, token, amountIn, toToken, tokenPrices);
+            _swap(safe, token, amountIn, toToken, tokenDataFound);
             uint256 balanceAfter = IERC20(toToken).balanceOf(address(safe));
             amountOut = balanceAfter - balanceBefore;
         }
@@ -366,13 +361,13 @@ contract CholoDromeModule is Ownable {
     /// @notice Internal swap function with native ETH support for wrapping/unwrapping.
     function _swap(
         ISafe safe,
-        address token,
+        address fromToken,
         uint256 amountIn,
         address toToken,
-        TokenPrice[] memory tokenPrices
+        TokenData memory tokenData
     ) internal returns (bool) {
         // If token is native ETH (represented as address(0)), wrap it to WETH
-        if (token == address(0)) {
+        if (fromToken == address(0)) {
             require(
                 msg.value == amountIn,
                 "Msg.value must equal amountIn for native ETH"
@@ -389,7 +384,7 @@ contract CholoDromeModule is Ownable {
                 ),
                 "ETH wrapping failed"
             );
-            token = WETH;
+            fromToken = WETH;
         } else {
             require(
                 msg.value == 0,
@@ -404,9 +399,7 @@ contract CholoDromeModule is Ownable {
             shouldUnwrap = true;
         }
 
-        require(token != toToken, "Cannot swap to same token");
-
-        bytes memory path = _getSwapPath(token, tokenPrices);
+        require(fromToken != toToken, "Cannot swap to same token");
 
         // Approve the swap router to spend the input token
         bytes memory approveData = abi.encodeWithSelector(
@@ -416,7 +409,7 @@ contract CholoDromeModule is Ownable {
         );
         require(
             safe.execTransactionFromModule(
-                token,
+                fromToken,
                 0,
                 approveData,
                 Enum.Operation.Call
@@ -425,10 +418,10 @@ contract CholoDromeModule is Ownable {
         );
 
         uint256 amountOutMinimum = _calculateAmountOutMinimum(
-            token,
+            fromToken,
             amountIn,
             toToken,
-            tokenPrices
+            tokenData
         );
 
         // Prepare command and inputs for the Universal Router
@@ -443,7 +436,7 @@ contract CholoDromeModule is Ownable {
             address(safe), // recipient
             amountIn, // amountIn
             amountOutMinimum, // amountOutMinimum
-            path // path for the swap
+            tokenData.swapPath // path for the swap
         );
 
         bytes[] memory inputs = new bytes[](1);
@@ -491,33 +484,25 @@ contract CholoDromeModule is Ownable {
     /// @param safe The safe address
     /// @param token The token to swap
     /// @param amountIn The amount of tokens to swap
-    /// @param tokenPrices Array of token prices
+    /// @param tokenData Array of token prices
     /// @return success True if the swap was successful
     function _swapToStable(
         ISafe safe,
         address token,
         uint256 amountIn,
-        TokenPrice[] memory tokenPrices
+        TokenData[] memory tokenData
     ) internal returns (bool) {
         if (amountIn == 0) return true;
         if (token == rewardStable) return true;
 
-        // Check if the price and swap path for this token is provided
-        bool tokenFound = false;
-        for (uint256 i = 0; i < tokenPrices.length; i++) {
-            if (tokenPrices[i].token == token) {
-                tokenFound = true;
-                require(
-                    tokenPrices[i].swapPath.length > 0,
-                    "Swap path not set for token"
-                );
-                break;
-            }
-        }
+        (TokenData memory tokenDataFound, bool exists) = _getTokenData(
+            token,
+            tokenData
+        );
 
         // Only perform the swap if we have price and path for this token
-        if (tokenFound) {
-            return _swap(safe, token, amountIn, rewardStable, tokenPrices);
+        if (exists) {
+            return _swap(safe, token, amountIn, rewardStable, tokenDataFound);
         }
 
         // If token not found in prices array, don't swap
@@ -527,11 +512,11 @@ contract CholoDromeModule is Ownable {
     /// @notice Main function to withdraw liquidity and collect fees
     /// @param pool The pool address
     /// @param tokenId The ID of the position
-    /// @param tokenPrices Array of token prices relative to rewardStable
+    /// @param tokenData Array of token prices relative to rewardStable
     function withdrawAndCollect(
         address pool,
         uint256 tokenId,
-        TokenPrice[] calldata tokenPrices
+        TokenData[] calldata tokenData
     ) external {
         require(approvedPools[pool], "Pool not approved for this module");
 
@@ -567,7 +552,7 @@ contract CholoDromeModule is Ownable {
         // Handle unstaking if needed
         if (isStaked) {
             veloAmount = clGauge.earned(address(safe), tokenId);
-            _handleUnstakeAndCollect(safe, gaugeAddress, tokenId, tokenPrices);
+            _handleUnstakeAndCollect(safe, gaugeAddress, tokenId, tokenData);
         }
 
         uint256 amount0 = 0;
@@ -580,11 +565,11 @@ contract CholoDromeModule is Ownable {
             // Swap earned fees to USDT if prices are provided
             if (amount0 > 0) {
                 // Swap earned fees to USDT
-                _swapToStable(safe, token0, amount0, tokenPrices);
+                _swapToStable(safe, token0, amount0, tokenData);
             }
 
             if (amount1 > 0) {
-                _swapToStable(safe, token1, amount1, tokenPrices);
+                _swapToStable(safe, token1, amount1, tokenData);
             }
         }
 
@@ -637,11 +622,11 @@ contract CholoDromeModule is Ownable {
     /// @notice Collects fees from a position and converts them to USDT
     /// @param pool The pool address
     /// @param tokenId The ID of the position
-    /// @param tokenPrices Array of token prices relative to rewardStable
+    /// @param tokenData Array of token prices relative to rewardStable
     function collectAndConvertFees(
         address pool,
         uint256 tokenId,
-        TokenPrice[] calldata tokenPrices
+        TokenData[] calldata tokenData
     ) external {
         require(approvedPools[pool], "Pool not approved for this module");
 
@@ -676,7 +661,7 @@ contract CholoDromeModule is Ownable {
                 );
 
                 require(
-                    _swapToStable(safe, rewardToken, veloAmount, tokenPrices),
+                    _swapToStable(safe, rewardToken, veloAmount, tokenData),
                     "Swap to stable failed"
                 );
             }
@@ -705,11 +690,11 @@ contract CholoDromeModule is Ownable {
 
             // Swap collected fees to USDT if prices are provided
             if (amount0 > 0) {
-                _swapToStable(safe, token0, amount0, tokenPrices);
+                _swapToStable(safe, token0, amount0, tokenData);
             }
 
             if (amount1 > 0) {
-                _swapToStable(safe, token1, amount1, tokenPrices);
+                _swapToStable(safe, token1, amount1, tokenData);
             }
         }
 
@@ -735,11 +720,11 @@ contract CholoDromeModule is Ownable {
     /// @notice Stakes a position in the gauge and collects any earned fees before staking
     /// @param pool The pool address
     /// @param tokenId The ID of the position
-    /// @param tokenPrices Array of token prices relative to rewardStable
+    /// @param tokenData Array of token prices relative to rewardStable
     function stakeAndCollect(
         address pool,
         uint256 tokenId,
-        TokenPrice[] calldata tokenPrices
+        TokenData[] calldata tokenData
     ) external {
         require(approvedPools[pool], "Pool not approved for this module");
 
@@ -783,11 +768,11 @@ contract CholoDromeModule is Ownable {
 
         // Swap collected fees to USDT if prices are provided
         if (amount0 > 0) {
-            _swapToStable(safe, token0, amount0, tokenPrices);
+            _swapToStable(safe, token0, amount0, tokenData);
         }
 
         if (amount1 > 0) {
-            _swapToStable(safe, token1, amount1, tokenPrices);
+            _swapToStable(safe, token1, amount1, tokenData);
         }
 
         // Check if NFT approval is needed
