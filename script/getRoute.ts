@@ -5,8 +5,7 @@ import CholoDromeModule from "../artifacts/contracts/CholoDromeModule.sol/CholoD
 import { ethers } from "ethers";
 
 // Contract address from deployment
-// const DEPLOYED_ADDRESS = "0xfD8B162f08c1c8D64E0Ed81AF65849C56C3500Ac";
-const DEPLOYED_ADDRESS = "0x39fcaE2F5CEe795fd5436948228608e74413F4e0";
+const DEPLOYED_ADDRESS = "0x5435575507e6Fb56096C86075aBc4F1F4705c5Fc";
 
 task("set-routes", "Get and set Uniswap V3 routes in the contract").setAction(
   async (_, hre: HardhatRuntimeEnvironment) => {

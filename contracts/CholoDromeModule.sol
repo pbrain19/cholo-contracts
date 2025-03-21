@@ -22,7 +22,10 @@ contract CholoDromeModule is Ownable {
     // Updated struct for token prices relative to rewardStable (USDT) including swap path
     struct TokenData {
         address token;
-        uint256 price; // Price with decimals that varies based on token decimals relationship
+        uint256 price; // Raw oracle price value with 18 decimals of extra precision
+        // IMPORTANT: All prices work with the dynamic formula:
+        // - outputAmount = (inputAmount * price * 10^outputDecimals) / 10^(outputDecimals + 18)
+        // This formula handles any token decimal configuration correctly
         bytes swapPath; // Direct encoded path to swap this token to the desired output token
     }
 
@@ -140,7 +143,7 @@ contract CholoDromeModule is Ownable {
     /// @param tokenIn The input token address
     /// @param amountIn The input amount
     /// @param tokenOut The output token address
-    /// @param tokenData Array of token prices representing direct exchange rates (1 tokenIn = X tokenOut)
+    /// @param tokenData Token data containing raw oracle price values with 18 decimals of extra precision
     /// @return The minimum amount out considering slippage
     function _calculateAmountOutMinimum(
         address tokenIn,
@@ -151,34 +154,32 @@ contract CholoDromeModule is Ownable {
         if (tokenIn == tokenOut) return amountIn;
         if (amountIn == 0) return 0;
 
-        // Get decimals for both tokens
-        uint8 decimalsIn = IERC20Metadata(tokenIn).decimals();
-        uint8 decimalsOut = IERC20Metadata(tokenOut).decimals();
+        // Safety check for valid token addresses
+        require(tokenIn != address(0), "Invalid input token");
 
-        uint256 exchangeRate = tokenData.price;
-
-        // Calculate expected amount based on token decimals
-        uint256 expectedAmount;
-
-        if (decimalsIn == decimalsOut) {
-            // If input and output tokens have the same decimals, assume rate is in 18 decimals
-            uint256 scaleIn = 10 ** decimalsIn;
-            uint256 scaleOut = 10 ** decimalsOut;
-            uint256 e18 = 10 ** 18;
-
-            uint256 numerator = amountIn * exchangeRate * scaleOut;
-            uint256 denominator = scaleIn * e18;
-
-            expectedAmount = numerator / denominator;
-        } else {
-            // If decimals differ, assume rate is in the output token's decimals
-            uint256 scaleIn = 10 ** decimalsIn;
-
-            uint256 numerator = amountIn * exchangeRate;
-            uint256 denominator = scaleIn;
-
-            expectedAmount = numerator / denominator;
+        // If tokenOut is invalid, use rewardStable as fallback
+        if (
+            tokenOut == address(0) ||
+            tokenOut == 0x0000000000000000000000000000000000000000
+        ) {
+            tokenOut = rewardStable;
         }
+
+        // Get decimals for the output token
+        uint8 outputDecimals = IERC20Metadata(tokenOut).decimals();
+
+        // Get the oracle price value
+        uint256 oracleOutput = tokenData.price;
+
+        // Calculate expected output amount using the oracle-based formula
+        // outputScale = 10^(outputDecimals)
+        // denominator = 10^(outputDecimals + 18) - Dynamic denominator based on output token decimals
+        uint256 outputScale = 10 ** outputDecimals;
+        uint256 denominator = 10 ** (outputDecimals + 18); // Dynamic based on output token decimals
+
+        // Calculate the expected output amount
+        uint256 expectedAmount = (amountIn * oracleOutput * outputScale) /
+            denominator;
 
         // Apply slippage tolerance
         return
