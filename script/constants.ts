@@ -85,6 +85,9 @@ export const poolsToApprove = [
   "0xde5ff829fef54d1bdec957d9538a306f0ead1368",
   "0x0c40e7f5b43f6759060a3c4d2fb406dfecf03b57",
   "0x46d398a5b33709877f50c8918a7ee96f1be1d7dd",
+  "0x385B47e56b73eb6549378f78F7c7Cbc42C56C9e0",
+  "0x4BA1e3E9280facbAcaFA7baF4aE0b78Bea60beCa",
+  "0xa41Bc0AFfbA7Fd420d186b84899d7ab2aC57fcD1",
 ];
 
 export const PATHS_WE_NEED = [
