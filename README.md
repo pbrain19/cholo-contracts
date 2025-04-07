@@ -1,4 +1,4 @@
-# Manager your liquidity like a cholo
+# Manage your liquidity like a cholo
 
 a collection of smart contracts designed to make it easier to manage your lp on velodrome
 
